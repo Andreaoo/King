@@ -111,8 +111,7 @@ io.on("connection", (socket) => {
 
   socket.on("leaveRoom", () => {
     if (currentRoom) {
-      currentRoom.markDisconnected(socket.id);
-      currentRoom.emit();
+      currentRoom.playerLeaves(playerId);
       cleanup(currentRoom);
       currentRoom = null;
     }
@@ -120,10 +119,21 @@ io.on("connection", (socket) => {
 
   socket.on("disconnect", () => {
     if (currentRoom) {
-      const p = currentRoom.markDisconnected(socket.id);
-      if (p) currentRoom.message = `${p.name} si è disconnesso (può riconnettersi)`;
-      currentRoom.emit();
-      cleanup(currentRoom);
+      const room = currentRoom;
+      const p = room.markDisconnected(socket.id);
+      if (p && !p.bot) {
+        room.message = `${p.name} si è disconnesso…`;
+        room.emit();
+        // periodo di grazia per riconnessione: se non torna, diventa bot (o chiude se master)
+        const leavingId = p.id;
+        setTimeout(() => {
+          const still = room.players.find((x) => x.id === leavingId);
+          if (still && !still.bot && !still.connected) {
+            room.convertToBotIfStillOffline(leavingId);
+          }
+        }, 30000); // 30s per rientrare
+      }
+      cleanup(room);
     }
   });
 });
@@ -134,7 +144,7 @@ function cleanup(room) {
   if (!anyHuman) {
     setTimeout(() => {
       const stillEmpty = !room.players.some((p) => !p.bot && p.connected);
-      if (stillEmpty) { clearTimeout(room.botTimer); rooms.delete(room.code); }
+      if (stillEmpty) { clearTimeout(room.botTimer); room.stopWatchdog?.(); rooms.delete(room.code); }
     }, 60000); // 60s di grazia per riconnessione
   }
 }

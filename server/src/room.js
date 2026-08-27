@@ -57,10 +57,11 @@ export class GameRoom {
   fillWithBots() {
     let bi = 0;
     while (this.players.length < 4) {
+      const seat = this.players.length;
       this.players.push({
-        id: `bot-${this.code}-${bi}`, name: BOT_NAMES[bi], bot: true,
+        id: `bot-${this.code}-s${seat}`, name: BOT_NAMES[bi], bot: true,
         difficulty: this.difficulty, diffLabel: DIFF_LABEL[this.difficulty],
-        connected: true, seat: this.players.length,
+        connected: true, seat,
       });
       bi++;
     }
@@ -73,12 +74,69 @@ export class GameRoom {
     return p;
   }
 
+  // Un giocatore lascia volontariamente (preme Esci).
+  // Master -> chiude la partita per tutti. Altro -> avviso + sostituito da bot.
+  playerLeaves(playerId) {
+    const p = this.players.find((x) => x.id === playerId);
+    if (!p || p.bot) return { closed: false };
+
+    if (playerId === this.ownerId) {
+      // il proprietario esce: chiude tutto
+      this.status = "closed";
+      this.closedByMaster = true;
+      this.stopWatchdog();
+      this.emit();
+      return { closed: true };
+    }
+
+    // giocatore normale: diventa un bot, la partita continua
+    const originalName = p.name;
+    this.replacePlayerWithBot(p);
+    this.notice = `${originalName} ha lasciato la partita — sostituito da un bot.`;
+    this.emit();
+    return { closed: false };
+  }
+
+  // Come sopra ma per disconnessione involontaria che non rientra in tempo.
+  convertToBotIfStillOffline(playerId) {
+    const p = this.players.find((x) => x.id === playerId);
+    if (!p || p.bot || p.connected) return;
+    if (playerId === this.ownerId) {
+      this.status = "closed";
+      this.closedByMaster = true;
+      this.stopWatchdog();
+      this.emit();
+      return;
+    }
+    const originalName = p.name;
+    this.replacePlayerWithBot(p);
+    this.notice = `${originalName} si è disconnesso — sostituito da un bot.`;
+    this.emit();
+  }
+
+  replacePlayerWithBot(p) {
+    // trova un nome bot libero
+    const used = new Set(this.players.filter((x) => x.bot).map((x) => x.name));
+    const name = BOT_NAMES.find((n) => !used.has(n)) || "Bot";
+    p.bot = true;
+    p.name = name;
+    p.difficulty = this.difficulty;
+    p.diffLabel = { easy: "Facile", neutral: "Neutro", hard: "Difficile" }[this.difficulty];
+    p.connected = true;
+    p.socketId = null;
+    p.id = `bot-${this.code}-s${p.seat}`;
+    // riavvia il driver: se il turno (o l'attesa briscola) tocca a un bot, prosegue da solo.
+    // Chiamata incondizionata perché scheduleBot verifica internamente di chi è il turno.
+    if (this.status === "playing") this.scheduleBot();
+  }
+
   // -------- avvio partita --------
   start() {
     this.fillWithBots();
     this.status = "playing";
     this.totalScores = [0, 0, 0, 0];
     this.modeIndex = 0;
+    this.startWatchdog();
     this.startMode();
   }
 
@@ -160,6 +218,9 @@ export class GameRoom {
   }
 
   resolveCurrentTrick() {
+    // guardia: risolvi solo se la presa è davvero completa (4 carte).
+    // Protegge da race dovute a disconnessioni/uscite mentre un timer è in volo.
+    if (this.status !== "playing" || this.table.length < 4) return;
     const winner = resolveTrick(this.table, this.trump);
     const ctx = { trickNumber: this.trickNumber, totalTricks: 13 };
     let pts = 0;
@@ -230,7 +291,7 @@ export class GameRoom {
 
   nextMode(playerId) {
     if (playerId !== this.ownerId) return;
-    if (this.modeIndex + 1 >= 13) { this.status = "gameOver"; this.emit(); return; }
+    if (this.modeIndex + 1 >= 13) { this.status = "gameOver"; this.stopWatchdog(); this.emit(); return; }
     this.modeIndex += 1;
     this.status = "playing";
     this.startMode();
@@ -239,33 +300,58 @@ export class GameRoom {
   // -------- bot driver --------
   scheduleBot() {
     clearTimeout(this.botTimer);
+    this.botPending = false;
     if (this.status !== "playing") return;
-    const p = this.players[this.turn];
-    if (!p || !p.bot) return;
+    if (!this.players[this.turn] || !this.players[this.turn].bot) return;
 
+    this.botPending = true;
     this.botTimer = setTimeout(() => {
+      this.botPending = false;
+      // rileggo SEMPRE il giocatore di turno al momento dell'esecuzione:
+      // il turno può essere cambiato tra la schedulazione e lo scatto del timer
+      // (es. dopo che un giocatore uscito è diventato bot).
+      if (this.status !== "playing") return;
+      const seat = this.turn;
+      const p = this.players[seat];
+      if (!p || !p.bot) return;
+
       if (this.awaitingTrump && this.modeKey === "chosenTrump") {
-        this.trump = botChooseTrump(this.hands[this.turn], p.difficulty);
+        this.trump = botChooseTrump(this.hands[seat], p.difficulty);
         this.awaitingTrump = false;
         this.message = `${p.name} sceglie briscola`;
         this.emit();
         return this.scheduleBot();
       }
       if (this.modeKey === "domino") {
-        const valid = dominoValidCards(this.hands[this.turn], this.dominoBoard);
+        const valid = dominoValidCards(this.hands[seat], this.dominoBoard);
         if (valid.length) {
           const seven = valid.find((c) => c.rank === "7");
-          this.dominoPlay(this.turn, (seven || valid[Math.floor(Math.random() * valid.length)]).id);
-        } else this.afterDomino(this.turn);
+          this.dominoPlay(seat, (seven || valid[Math.floor(Math.random() * valid.length)]).id);
+        } else this.afterDomino(seat);
         return;
       }
-      const valid = validTrickMoves(this.hands[this.turn], this.table);
+      const valid = validTrickMoves(this.hands[seat], this.table);
       if (!valid.length) return;
       const ctx = { trickNumber: this.trickNumber, totalTricks: 13 };
-      const card = botChooseCard(this.hands[this.turn], valid, this.table, this.trump, this.modeKey, p.difficulty, ctx);
+      const card = botChooseCard(this.hands[seat], valid, this.table, this.trump, this.modeKey, p.difficulty, ctx);
       this.playCard(p.id, card.id);
     }, 700);
   }
+
+  // Watchdog anti-stallo: rilancia il driver SOLO se il turno è di un bot fermo
+  // e non c'è già un'azione bot in volo (così non resetta all'infinito il timer).
+  startWatchdog() {
+    clearInterval(this.watchdog);
+    this.watchdog = setInterval(() => {
+      if (this.status !== "playing") return;
+      if (this.botPending) return;                        // c'è già un'azione schedulata
+      const p = this.players[this.turn];
+      if (!p || !p.bot) return;                           // turno umano: si aspetta
+      if (this.table.some((t) => t.player === this.turn)) return;
+      this.scheduleBot();                                 // bot fermo: rilancia
+    }, 1500);
+  }
+  stopWatchdog() { clearInterval(this.watchdog); }
 
   // -------- viste per giocatore (nascondono le carte altrui e la briscola nascosta) --------
   stateFor(playerId) {
@@ -298,6 +384,8 @@ export class GameRoom {
       awaitingTrump: this.awaitingTrump,
       dominoBoard: this.dominoBoard,
       message: this.message,
+      notice: this.notice || null,          // avviso centrale (giocatore uscito → bot)
+      closedByMaster: !!this.closedByMaster, // il master ha chiuso la partita
       myHand: seat >= 0 ? this.hands[seat] : [],
     };
   }

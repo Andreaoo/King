@@ -42,7 +42,9 @@ export default function App() {
   const [joinCode, setJoinCode] = useState(readRoomFromUrl());
   const [difficulty, setDifficulty] = useState("neutral");
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState(null); // avviso centrale (giocatore uscito)
   const lastActionKey = useRef(null);
+  const lastNotice = useRef(null);
   const urlRoom = useMemo(readRoomFromUrl, []);
 
   useEffect(() => {
@@ -61,8 +63,13 @@ export default function App() {
     socket.on("state", (s) => {
       setState(s);
       sessionStorage.setItem("ck_room", s.code);
+      // mostra l'avviso centrale solo quando è nuovo (evita ripetizioni ad ogni update)
+      if (s.notice && s.notice !== lastNotice.current) {
+        lastNotice.current = s.notice;
+        setNotice(s.notice);
+      }
       if (s.status === "lobby") setView("lobby");
-      else setView("game");
+      else if (s.status !== "closed") setView("game");
     });
     return () => socket.disconnect();
   }, []); // eslint-disable-line
@@ -108,11 +115,11 @@ export default function App() {
   const connBanner = <ConnBanner status={connStatus} />;
 
   if (connStatus === "connecting" && !state)
-    return <Shell>{connBanner}<div className="ck-center-msg">Connessione al server…<br /><small>{SERVER_URL}</small></div></Shell>;
+    return <Shell notice={notice} onCloseNotice={() => setNotice(null)}>{connBanner}<div className="ck-center-msg">Connessione al server…<br /><small>{SERVER_URL}</small></div></Shell>;
 
   if (view === "home" || view === "join")
     return (
-      <Shell>
+      <Shell notice={notice} onCloseNotice={() => setNotice(null)}>
         {connBanner}
         <Home
           view={view} setView={setView} name={name} setName={setName}
@@ -124,11 +131,24 @@ export default function App() {
       </Shell>
     );
 
-  if (!state) return <Shell>{connBanner}<div className="ck-center-msg">Caricamento…</div></Shell>;
+  if (!state) return <Shell notice={notice} onCloseNotice={() => setNotice(null)}>{connBanner}<div className="ck-center-msg">Caricamento…</div></Shell>;
+
+  if (state.status === "closed" && state.closedByMaster)
+    return (
+      <Shell notice={notice} onCloseNotice={() => setNotice(null)}>
+        {connBanner}
+        <div className="closed-screen">
+          <div className="closed-icon">🚪</div>
+          <h1>Partita chiusa</h1>
+          <p>Il proprietario della stanza ha lasciato la partita.</p>
+          <button className="btn primary wide" onClick={leaveRoom}>Torna al menu</button>
+        </div>
+      </Shell>
+    );
 
   if (state.status === "lobby")
     return (
-      <Shell>
+      <Shell notice={notice} onCloseNotice={() => setNotice(null)}>
         {connBanner}
         <Lobby
           state={state} pid={pid}
@@ -139,7 +159,7 @@ export default function App() {
     );
 
   return (
-    <Shell>
+    <Shell notice={notice} onCloseNotice={() => setNotice(null)}>
       {connBanner}
       <Game
         state={state} pid={pid} guardedAct={guardedAct}
@@ -493,8 +513,22 @@ function DominoBoard({ board }) {
 }
 
 /* ---------------- SHELL + STYLE ---------------- */
-function Shell({ children }) {
-  return <div className="ck-root"><Style />{children}</div>;
+function Shell({ children, notice, onCloseNotice }) {
+  return (
+    <div className="ck-root">
+      <Style />
+      {children}
+      {notice && (
+        <div className="notice-overlay" onClick={onCloseNotice}>
+          <div className="notice-box" onClick={(e) => e.stopPropagation()}>
+            <div className="notice-icon">ℹ️</div>
+            <p>{notice}</p>
+            <button className="btn primary" onClick={onCloseNotice}>OK</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 function Style() {
@@ -700,6 +734,22 @@ function Style() {
     /* mani con molte carte: vanno a capo senza scroll orizzontale */
     .hand-cards { max-width:100%; }
     .ck-root, .game { overflow-x:hidden; }
+
+    /* --- schermata chiusa dal master --- */
+    .closed-screen { background:rgba(0,0,0,.22); border:1px solid rgba(217,178,95,.3);
+      border-radius:18px; padding:32px; width:min(420px,92vw); margin:auto; text-align:center; }
+    .closed-icon { font-size:52px; margin-bottom:8px; }
+    .closed-screen h1 { font-family:'Cormorant Garamond',serif; font-size:34px; color:var(--gold); margin:.1em 0 .3em; }
+    .closed-screen p { color:#d7e7dc; margin-bottom:20px; }
+
+    /* --- popup avviso centrale (giocatore uscito) --- */
+    .notice-overlay { position:fixed; inset:0; z-index:300; background:rgba(0,0,0,.55);
+      display:flex; align-items:center; justify-content:center; padding:20px; backdrop-filter:blur(2px); }
+    .notice-box { background:#123f2a; border:1px solid rgba(217,178,95,.4); border-radius:16px;
+      padding:24px; width:min(360px,92vw); text-align:center; box-shadow:0 20px 60px rgba(0,0,0,.5); }
+    .notice-icon { font-size:34px; margin-bottom:6px; }
+    .notice-box p { color:#f0e6cf; font-size:15px; line-height:1.5; margin-bottom:18px; }
+    .notice-box .btn { min-width:120px; }
     `}</style>
   );
 }

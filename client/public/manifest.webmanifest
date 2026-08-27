@@ -1,0 +1,16 @@
+{
+  "name": "Cart King",
+  "short_name": "Cart King",
+  "description": "Barbu multiplayer · 13 mani · gioca online con gli amici",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0a3d26",
+  "theme_color": "#0f5132",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

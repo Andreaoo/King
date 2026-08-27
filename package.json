@@ -1,0 +1,12 @@
+{
+  "name": "cart-king",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Cart King - Barbu multiplayer online (PWA)",
+  "scripts": {
+    "install:all": "cd client && npm install && cd ../server && npm install",
+    "build": "cd client && npm install && npm run build",
+    "start": "cd server && npm install && npm start",
+    "deploy:build": "npm run build && cd server && npm install"
+  }
+}

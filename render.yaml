@@ -1,0 +1,12 @@
+# Deploy gratuito su Render.com (supporta Node.js + WebSocket).
+# Un solo servizio serve sia il gioco (frontend) sia il multiplayer (backend).
+services:
+  - type: web
+    name: cart-king
+    runtime: node
+    plan: free
+    buildCommand: npm run deploy:build
+    startCommand: cd server && npm start
+    envVars:
+      - key: NODE_VERSION
+        value: "20"

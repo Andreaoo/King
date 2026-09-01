@@ -51,6 +51,15 @@ const httpServer = createServer(async (req, res) => {
 // CORS: in locale accetta tutto; in produzione puoi restringere con CLIENT_ORIGIN
 const io = new Server(httpServer, {
   cors: { origin: process.env.CLIENT_ORIGIN || "*", methods: ["GET", "POST"] },
+  // ottimizzazioni per reti mobili instabili
+  pingInterval: 20000,        // ping ogni 20s per tenere viva la connessione
+  pingTimeout: 25000,         // tolleranza prima di considerare caduta la connessione (reti lente)
+  connectTimeout: 20000,      // tempo per stabilire la connessione iniziale
+  perMessageDeflate: {        // compressione dei messaggi (stato di gioco) per ridurre il traffico
+    threshold: 512,           // comprime solo payload > 512 byte
+  },
+  transports: ["websocket", "polling"], // websocket preferito, polling come fallback
+  maxHttpBufferSize: 1e6,     // limite ragionevole per i messaggi
 });
 
 /** @type {Map<string, GameRoom>} */
@@ -106,6 +115,7 @@ io.on("connection", (socket) => {
 
   socket.on("playCard", ({ cardId }) => currentRoom?.playCard(playerId, cardId));
   socket.on("chooseTrump", ({ suit }) => currentRoom?.chooseTrump(playerId, suit));
+  socket.on("chooseBlind", ({ blind }) => currentRoom?.chooseBlind(playerId, blind));
   socket.on("dominoPass", () => currentRoom?.dominoPass(playerId));
   socket.on("nextMode", () => currentRoom?.nextMode(playerId));
 

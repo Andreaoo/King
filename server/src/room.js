@@ -3,12 +3,13 @@
 // verità: i client inviano intenzioni, il server valida ed emette lo stato.
 // ============================================================================
 import {
-  CONFIG, SUITS, RANKS, createDeck, shuffleDeck, dealCards,
-  validTrickMoves, resolveTrick, dominoValidCards, botChooseCard, botChooseTrump,
+  CONFIG, SUITS, RANKS, rankValue, createDeck, shuffleDeck, dealCards,
+  validTrickMoves, updateBrokenSuits, resolveTrick, dominoValidCards,
+  botChooseCard, botChooseTrump, botDecidesReshuffle,
 } from "./engine.js";
 
-const BOT_NAMES = ["Bot Aria", "Bot Nova", "Bot Zeno", "Bot Iris"];
-const DIFF_LABEL = { easy: "Facile", neutral: "Neutro", hard: "Difficile" };
+const BOT_NAMES = ["Bot 1", "Bot 2", "Bot 3", "Bot 4"];
+const DIFF_LABEL = { easy: "Facile", neutral: "Neutro", hard: "Difficile", extreme: "Estremo" };
 
 export class GameRoom {
   constructor(code, io) {
@@ -16,10 +17,12 @@ export class GameRoom {
     this.io = io;
     this.players = []; // {id, name, bot, difficulty, connected, socketId, seat}
     this.ownerId = null;
-    this.status = "lobby"; // lobby | playing | modeEnd | gameOver
+    this.status = "lobby"; // lobby | draw | playing | modeEnd | gameOver
     this.difficulty = "neutral";
 
     this.modeIndex = 0;
+    this.playOrder = CONFIG.modeOrder.map((_, i) => i); // mani selezionate (indici in modeOrder)
+    this.startSeat = 0;           // sorteggiato che inizia la partita
     this.hands = [[], [], [], []];
     this.table = [];
     this.turn = 0;
@@ -32,12 +35,19 @@ export class GameRoom {
     this.awaitingTrump = false;
     this.dominoBoard = {};
     this.dominoFinished = [];
+    this.dominoEndTurn = null;    // turno di chiusura del giro domino
+    this.brokenSuits = new Set(); // semi spezzati (regola dello spezzare)
+    this.penaltyCardsSeen = 0;    // carte penalizzanti raccolte (fine anticipata)
+    this.protectedSuit = null;    // seme non apribile finché non spezzato
+    this.blindBy = null;          // seat che gioca "al buio" (punti doppi)
     this.message = "";
     this.botTimer = null;
   }
 
-  get modeKey() { return CONFIG.modeOrder[this.modeIndex]; }
+  get realModeIndex() { return this.playOrder[this.modeIndex] ?? 0; }
+  get modeKey() { return CONFIG.modeOrder[this.realModeIndex]; }
   get mode() { return CONFIG.modes[this.modeKey]; }
+  get totalModes() { return this.playOrder.length; }
 
   // -------- lobby --------
   addHuman(playerId, name, socketId) {
@@ -50,8 +60,12 @@ export class GameRoom {
     return p;
   }
 
-  setConfig({ difficulty }) {
+  setConfig({ difficulty, enabledModes }) {
     if (difficulty) this.difficulty = difficulty;
+    if (enabledModes) {
+      const order = CONFIG.modeOrder.map((_, i) => i).filter((i) => enabledModes[i]);
+      this.playOrder = order.length ? order : CONFIG.modeOrder.map((_, i) => i);
+    }
   }
 
   fillWithBots() {
@@ -133,11 +147,20 @@ export class GameRoom {
   // -------- avvio partita --------
   start() {
     this.fillWithBots();
-    this.status = "playing";
     this.totalScores = [0, 0, 0, 0];
     this.modeIndex = 0;
-    this.startWatchdog();
-    this.startMode();
+    // sorteggio iniziale: estrai a caso chi comincia
+    this.startSeat = Math.floor(Math.random() * 4);
+    this.status = "draw";
+    this.message = `Sorteggio: inizia ${this.players[this.startSeat].name}`;
+    this.emit();
+    // dopo una breve pausa (per mostrare il sorteggio ai client) parte la prima mano
+    setTimeout(() => {
+      if (this.status !== "draw") return;
+      this.status = "playing";
+      this.startWatchdog();
+      this.startMode();
+    }, 3200);
   }
 
   startMode() {
@@ -150,8 +173,15 @@ export class GameRoom {
     this.trump = null;
     this.dominoBoard = {};
     this.dominoFinished = [];
+    this.dominoEndTurn = null;
+    this.brokenSuits = new Set();
+    this.penaltyCardsSeen = 0;
+    this.blindBy = null;
     const key = this.modeKey;
-    const starter = this.modeIndex % 4;
+    // seme protetto (spezzare): dal CONFIG, o la briscola per le mani positive
+    this.protectedSuit = this.mode.protectedSuit || null;
+    // chi inizia: rotazione dal sorteggiato, +1 posto per ogni mano giocata
+    const starter = (this.startSeat + this.modeIndex) % 4;
     this.trickStarter = starter;
     this.turn = starter;
     this.awaitingTrump = false;
@@ -159,6 +189,7 @@ export class GameRoom {
     if (key === "chosenTrump") {
       if (this.players[starter].bot) {
         this.trump = botChooseTrump(dealt[starter], this.players[starter].difficulty);
+        this.protectedSuit = this.trump; // la briscola non si apre finché non spezzata
         this.message = `${this.players[starter].name} sceglie briscola: ${this.trump}`;
       } else {
         this.awaitingTrump = true;
@@ -166,11 +197,24 @@ export class GameRoom {
       }
     } else if (key === "hiddenTrump") {
       this.trump = SUITS[Math.floor(Math.random() * 4)]; // nascosta ai client
+      this.protectedSuit = null; // niente spezzare: il seme di briscola è sconosciuto ai giocatori
       this.message = "Briscola nascosta";
     } else if (key === "domino") {
-      const s = dealt.findIndex((h) => h.some((c) => c.rank === "7" && c.suit === "hearts"));
+      // domino: inizia chi ha il 7 di denari (eccezione, non rompe la rotazione)
+      const s = dealt.findIndex((h) => h.some((c) => c.rank === "7" && c.suit === "diamonds"));
       this.trickStarter = s; this.turn = s;
       this.message = "Domino: parti dai 7";
+      // regola dei 4 estremi: un bot con 4+ tra Assi e Re può rimescolare
+      const extremesOf = (h) => h.filter((c) => c.rank === "A" || c.rank === "K").length;
+      const botReshuffle = this.players.findIndex((p, i) => p.bot && botDecidesReshuffle(extremesOf(dealt[i]), p.difficulty));
+      if (botReshuffle !== -1 && (this._reshuffleCount || 0) < 3) {
+        this._reshuffleCount = (this._reshuffleCount || 0) + 1;
+        this.message = `${this.players[botReshuffle].name} ha 4 estremi: rimescola`;
+        this.emit();
+        setTimeout(() => this.startMode(), 1200);
+        return;
+      }
+      this._reshuffleCount = 0;
     } else {
       this.message = this.mode.title;
     }
@@ -183,10 +227,21 @@ export class GameRoom {
     const p = this.players[this.turn];
     if (p.id !== playerId || !SUITS.includes(suit)) return;
     this.trump = suit;
+    this.protectedSuit = suit; // spezzare: la briscola scelta è protetta
     this.awaitingTrump = false;
     this.message = `Briscola: ${suit}`;
     this.emit();
     this.scheduleBot();
+  }
+
+  // il giocatore di turno sceglie di giocare "al buio" (punti doppi solo per lui)
+  chooseBlind(playerId, yes) {
+    if (!this.awaitingTrump) return;
+    const p = this.players[this.turn];
+    if (p.id !== playerId) return;
+    if (yes) this.blindBy = this.turn;
+    this.message = yes ? "Al buio! Scegli il seme" : "Scegli il seme";
+    this.emit();
   }
 
   // -------- mossa a prese --------
@@ -201,7 +256,7 @@ export class GameRoom {
     const hand = this.hands[seat];
     const card = hand.find((c) => c.id === cardId);
     if (!card) return;
-    const valid = validTrickMoves(hand, this.table);
+    const valid = validTrickMoves(hand, this.table, this.trump, this.protectedSuit, this.brokenSuits);
     if (!valid.some((c) => c.id === cardId)) return; // mossa illegale: rifiutata
 
     this.hands[seat] = hand.filter((c) => c.id !== cardId);
@@ -219,20 +274,32 @@ export class GameRoom {
 
   resolveCurrentTrick() {
     // guardia: risolvi solo se la presa è davvero completa (4 carte).
-    // Protegge da race dovute a disconnessioni/uscite mentre un timer è in volo.
     if (this.status !== "playing" || this.table.length < 4) return;
     const winner = resolveTrick(this.table, this.trump);
     const ctx = { trickNumber: this.trickNumber, totalTricks: 13 };
     let pts = 0;
     for (const p of this.table) pts += this.mode.penalty ? this.mode.penalty(p.card) : 0;
     if (this.mode.trickPenalty) pts += this.mode.trickPenalty(ctx);
+    // "al buio": chi ha scelto il buio prende punti doppi sulle prese che vince
+    if (this.blindBy !== null && winner === this.blindBy && this.mode.positive) pts *= 2;
+
+    // aggiorna i semi spezzati (chi ha scartato fuori-seme spezza quel seme)
+    this.brokenSuits = updateBrokenSuits(this.table, this.brokenSuits);
+    // conta le carte penalizzanti raccolte (per la fine anticipata)
+    const penInTrick = this.mode.totalPenaltyCards
+      ? this.table.filter((p) => this.mode.penalty && this.mode.penalty(p.card) !== 0).length
+      : 0;
+    this.penaltyCardsSeen += penInTrick;
+
     this.handScores[winner] += pts;
     this.tricksWon[winner] += 1;
     this.message = `${this.players[winner].name} vince la presa${pts ? ` (${pts > 0 ? "+" : ""}${pts})` : ""}`;
     this.table = [];
     this.trickNumber += 1;
 
-    if (this.trickNumber >= 13) { this.finishMode(); return; }
+    // fine anticipata: se tutte le penalità sono state raccolte, la mano finisce
+    const allPenaltiesGone = this.mode.totalPenaltyCards && this.penaltyCardsSeen >= this.mode.totalPenaltyCards;
+    if (this.trickNumber >= 13 || allPenaltiesGone) { this.finishMode(); return; }
     this.trickStarter = winner;
     this.turn = winner;
     this.emit();
@@ -249,7 +316,11 @@ export class GameRoom {
     const v = RANKS.indexOf(card.rank);
     this.dominoBoard[card.suit] = b ? { low: Math.min(b.low, v), high: Math.max(b.high, v) } : { low: v, high: v };
     this.hands[seat] = hand.filter((c) => c.id !== cardId);
-    if (this.hands[seat].length === 0 && !this.dominoFinished.includes(seat)) this.dominoFinished.push(seat);
+    if (this.hands[seat].length === 0) {
+      if (!this.dominoFinished.includes(seat)) this.dominoFinished.push(seat);
+      // il primo che svuota la mano: si completa il giro fino a chi ha iniziato
+      if (this.dominoEndTurn === null) this.dominoEndTurn = this.trickStarter;
+    }
     this.afterDomino(seat);
   }
 
@@ -262,8 +333,16 @@ export class GameRoom {
   }
 
   afterDomino(seat) {
-    const empties = this.hands.filter((h) => h.length === 0).length;
-    if (empties >= 3) return this.finishDomino();
+    // se qualcuno ha finito, completa il giro fino all'iniziale, poi chiudi
+    if (this.dominoEndTurn !== null) {
+      for (let step = 1; step <= 4; step++) {
+        const n = (seat + step) % 4;
+        if (n === this.dominoEndTurn) { return this.finishDomino(); } // giro completato
+        if (this.hands[n].length > 0) { this.turn = n; this.emit(); this.scheduleBot(); return; }
+      }
+      return this.finishDomino();
+    }
+    // gioco normale: passa al prossimo con carte
     let n = (seat + 1) % 4, guard = 0;
     while (this.hands[n].length === 0 && guard < 4) { n = (n + 1) % 4; guard++; }
     this.turn = n;
@@ -291,7 +370,7 @@ export class GameRoom {
 
   nextMode(playerId) {
     if (playerId !== this.ownerId) return;
-    if (this.modeIndex + 1 >= 13) { this.status = "gameOver"; this.stopWatchdog(); this.emit(); return; }
+    if (this.modeIndex + 1 >= this.totalModes) { this.status = "gameOver"; this.stopWatchdog(); this.emit(); return; }
     this.modeIndex += 1;
     this.status = "playing";
     this.startMode();
@@ -330,7 +409,7 @@ export class GameRoom {
         } else this.afterDomino(seat);
         return;
       }
-      const valid = validTrickMoves(this.hands[seat], this.table);
+      const valid = validTrickMoves(this.hands[seat], this.table, this.trump, this.protectedSuit, this.brokenSuits);
       if (!valid.length) return;
       const ctx = { trickNumber: this.trickNumber, totalTricks: 13 };
       const card = botChooseCard(this.hands[seat], valid, this.table, this.trump, this.modeKey, p.difficulty, ctx);
@@ -372,6 +451,9 @@ export class GameRoom {
       modeTitle: this.mode.title,
       modeShort: this.mode.short,
       modeOrder: CONFIG.modeOrder,
+      playOrder: this.playOrder,          // mani effettivamente in gioco
+      totalModes: this.totalModes,
+      startSeat: this.startSeat,          // sorteggiato che ha iniziato
       hidden: !!this.mode.hidden,
       isTrickMode: this.mode.trick !== false,
       trump: this.mode.hidden ? null : this.trump, // briscola nascosta non inviata
@@ -382,10 +464,15 @@ export class GameRoom {
       totalScores: this.totalScores,
       tricksWon: this.tricksWon,
       awaitingTrump: this.awaitingTrump,
+      blindBy: this.blindBy,              // chi gioca al buio
+      protectedSuit: this.mode.hidden ? null : this.protectedSuit, // seme non apribile (nascosto se briscola hidden)
+      brokenSuits: [...this.brokenSuits], // semi già spezzati (array per serializzazione)
       dominoBoard: this.dominoBoard,
       message: this.message,
-      notice: this.notice || null,          // avviso centrale (giocatore uscito → bot)
-      closedByMaster: !!this.closedByMaster, // il master ha chiuso la partita
+      notice: this.notice || null,
+      closedByMaster: !!this.closedByMaster,
+      // al buio: la mia mano è coperta finché non ho scelto il seme
+      myHandHidden: (this.modeKey === "chosenTrump" && this.awaitingTrump && this.turn === seat && this.blindBy === seat),
       myHand: seat >= 0 ? this.hands[seat] : [],
     };
   }

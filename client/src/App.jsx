@@ -48,7 +48,14 @@ export default function App() {
   const urlRoom = useMemo(readRoomFromUrl, []);
 
   useEffect(() => {
-    const socket = io(SERVER_URL, { transports: ["websocket"], reconnection: true, reconnectionDelay: 800 });
+    const socket = io(SERVER_URL, {
+      transports: ["websocket", "polling"], // websocket preferito, polling se il websocket è bloccato
+      reconnection: true,
+      reconnectionDelay: 800,        // primo tentativo dopo 0.8s
+      reconnectionDelayMax: 5000,    // fino a 5s tra i tentativi
+      reconnectionAttempts: Infinity, // continua a riprovare (utile su mobile che va e viene)
+      timeout: 20000,
+    });
     socketRef.current = socket;
     socket.on("connect", () => {
       setConnStatus("online");
@@ -153,8 +160,17 @@ export default function App() {
         <Lobby
           state={state} pid={pid}
           onStart={() => emit("startGame")}
+          onConfig={(cfg) => emit("setConfig", cfg)}
           onLeave={leaveRoom}
         />
+      </Shell>
+    );
+
+  if (state.status === "draw")
+    return (
+      <Shell notice={notice} onCloseNotice={() => setNotice(null)}>
+        {connBanner}
+        <DrawScreen state={state} />
       </Shell>
     );
 
@@ -165,11 +181,42 @@ export default function App() {
         state={state} pid={pid} guardedAct={guardedAct}
         onPlay={(cardId) => emit("playCard", { cardId })}
         onTrump={(suit) => emit("chooseTrump", { suit })}
+        onBlind={(blind) => emit("chooseBlind", { blind })}
         onPass={() => emit("dominoPass")}
         onNext={() => emit("nextMode")}
         onLeave={leaveRoom}
       />
     </Shell>
+  );
+}
+
+/* ---------------- SORTEGGIO ---------------- */
+function DrawScreen({ state }) {
+  const winner = state.startSeat ?? 0;
+  const [hi, setHi] = useState(0);
+  const [done, setDone] = useState(false);
+  useEffect(() => {
+    let n = 0;
+    const iv = setInterval(() => {
+      n++;
+      setHi((h) => (h + 1) % 4);
+      if (n > 14) { clearInterval(iv); setHi(winner); setDone(true); }
+    }, 180);
+    return () => clearInterval(iv);
+  }, []); // eslint-disable-line
+  return (
+    <div className="draw-box">
+      <h2 className="draw-title">Chi inizia?</h2>
+      <p className="draw-sub">{done ? `Inizia ${state.players[winner]?.name}!` : "Sorteggio in corso…"}</p>
+      <div className="draw-slots">
+        {state.players.map((p, i) => (
+          <div key={i} className={`draw-slot ${hi === i ? "hot" : ""} ${done && winner === i ? "won" : ""}`}>
+            <span className="draw-ava">{p.bot ? "🤖" : "👤"}</span>
+            <span className="draw-name">{p.name}</span>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -232,26 +279,49 @@ function Home({ view, setView, name, setName, difficulty, setDifficulty, joinCod
 }
 
 /* ---------------- LOBBY ---------------- */
-function Lobby({ state, pid, onStart, onLeave }) {
+function Lobby({ state, pid, onStart, onConfig, onLeave }) {
   const isOwner = state.ownerId === pid;
   const humans = state.players.filter((p) => !p.bot).length;
   const [copied, setCopied] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  // 13 booleani: quali mani giocare (default tutte). Il proprietario le modifica.
+  const [enabled, setEnabled] = useState(() => (state.modeOrder || Array(13).fill(0)).map(() => true));
+
+  const modeLabels = useMemo(() => {
+    let cc = 0;
+    return (state.modeOrder || []).map((k) => {
+      if (k === "chosenTrump") { cc++; return `Seme scelto ${cc}`; }
+      return MODE_TITLES[k] || k;
+    });
+  }, [state.modeOrder]);
+  const selectedCount = enabled.filter(Boolean).length;
+
+  const toggleMode = (i) => {
+    setEnabled((prev) => {
+      if (prev[i] && selectedCount === 1) return prev; // almeno una
+      const next = [...prev]; next[i] = !next[i];
+      onConfig({ enabledModes: next });
+      return next;
+    });
+  };
+  const setAll = (val) => {
+    const next = (state.modeOrder || []).map(() => val);
+    if (!val) next[0] = true;
+    setEnabled(next); onConfig({ enabledModes: next });
+  };
 
   const roomUrl = `${window.location.origin}/room/${state.code}`;
   const shareText = `🃏 Vieni a giocare a Cart King!\n\nLink: ${roomUrl}\nCodice stanza: ${state.code}`;
 
   async function share() {
-    // share nativo iOS/Android se disponibile
     if (navigator.share) {
       try { await navigator.share({ title: "Cart King", text: shareText, url: roomUrl }); return; }
-      catch { /* utente ha annullato: ripiega su copia */ }
+      catch { /* annullato */ }
     }
-    // fallback: copia negli appunti
     try {
       await navigator.clipboard.writeText(shareText);
       setCopied(true); setTimeout(() => setCopied(false), 2000);
     } catch {
-      // ultimo fallback per browser vecchi
       const ta = document.createElement("textarea");
       ta.value = shareText; document.body.appendChild(ta); ta.select();
       document.execCommand("copy"); document.body.removeChild(ta);
@@ -267,6 +337,12 @@ function Lobby({ state, pid, onStart, onLeave }) {
       <button className="btn share" onClick={share}>
         {copied ? "✓ Copiato negli appunti" : "📤 Condividi stanza"}
       </button>
+
+      {isOwner && (
+        <button className="btn ghost wide" onClick={() => setShowSettings(true)}>
+          ⚙️ Mani da giocare ({selectedCount}/{modeLabels.length})
+        </button>
+      )}
 
       <div className="seats">
         {state.players.map((p, i) => (
@@ -285,12 +361,49 @@ function Lobby({ state, pid, onStart, onLeave }) {
       ) : (
         <div className="waiting">In attesa che il proprietario avvii la partita…</div>
       )}
+
+      {showSettings && (
+        <div className="settings-overlay" onClick={() => setShowSettings(false)}>
+          <div className="settings-box" onClick={(e) => e.stopPropagation()}>
+            <div className="settings-head">
+              <h3>Mani da giocare</h3>
+              <button className="settings-close" onClick={() => setShowSettings(false)}>✕</button>
+            </div>
+            <div className="settings-actions">
+              <button onClick={() => setAll(true)}>Tutte</button>
+              <button onClick={() => setAll(false)}>Nessuna</button>
+            </div>
+            <div className="mode-list-sel">
+              {modeLabels.map((label, i) => (
+                <label key={i} className={`mode-item ${enabled[i] ? "on" : ""}`}>
+                  <input type="checkbox" checked={!!enabled[i]} onChange={() => toggleMode(i)} />
+                  <span className="mode-num">{i + 1}</span>
+                  <span className="mode-name">{label}</span>
+                  {enabled[i] && <span className="mode-check">✓</span>}
+                </label>
+              ))}
+            </div>
+            <div className="settings-foot">
+              <span>{selectedCount} mani selezionate</span>
+              <button className="btn primary" onClick={() => setShowSettings(false)}>Fatto</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
+const MODE_TITLES = {
+  noKingsJacks: "No Re e Fanti", noQueens: "No Donne", no8Diamonds: "No 8 di Quadri",
+  noKingHearts: "No K di Cuori", noHearts: "No Cuori", lastTwoTricks: "Ultime Due Prese",
+  noTricks: "No Prese", domino: "Domino", chosenTrump: "Seme scelto", hiddenTrump: "Briscola non dichiarata",
+};
+
 /* ---------------- GAME ---------------- */
-function Game({ state: s, pid, guardedAct, onPlay, onTrump, onPass, onNext, onLeave }) {
+function Game({ state: s, pid, guardedAct, onPlay, onTrump, onBlind, onPass, onNext, onLeave }) {
+  const [blindDecided, setBlindDecided] = useState(false);
+  useEffect(() => { setBlindDecided(false); }, [s.modeIndex]); // reset a ogni mano
   const seat = s.youSeat;
   const myTurn = s.turn === seat;
   const isOwner = s.ownerId === pid;
@@ -308,7 +421,16 @@ function Game({ state: s, pid, guardedAct, onPlay, onTrump, onPass, onNext, onLe
       }).map((c) => c.id);
     }
     if (!s.isTrickMode) return [];
-    if (s.table.length === 0) return s.myHand.map((c) => c.id);
+    if (s.table.length === 0) {
+      // apertura: applica la regola dello "spezzare"
+      const prot = s.protectedSuit;
+      const broken = new Set(s.brokenSuits || []);
+      if (prot && !broken.has(prot)) {
+        const np = s.myHand.filter((c) => c.suit !== prot);
+        return (np.length ? np : s.myHand).map((c) => c.id);
+      }
+      return s.myHand.map((c) => c.id);
+    }
     const lead = s.table[0].card.suit;
     const same = s.myHand.filter((c) => c.suit === lead);
     return (same.length ? same : s.myHand).map((c) => c.id);
@@ -379,9 +501,20 @@ function Game({ state: s, pid, guardedAct, onPlay, onTrump, onPass, onNext, onLe
         </div>
       </div>
 
-      {s.awaitingTrump && myTurn && (
+      {s.awaitingTrump && myTurn && s.modeKey === "chosenTrump" && !blindDecided && (
         <div className="trump-picker">
-          <div className="tp-title">SCEGLI IL SEME DI BRISCOLA</div>
+          <div className="tp-title">VUOI GIOCARE AL BUIO?</div>
+          <div className="tp-sub">Scegli il seme senza vedere le carte e guadagni punti doppi (+2 a presa)</div>
+          <div className="blind-choice">
+            <button className="blind-yes" onClick={() => { onBlind(true); setBlindDecided(true); }}>SÌ, AL BUIO</button>
+            <button className="blind-no" onClick={() => { onBlind(false); setBlindDecided(true); }}>NO, VEDO LE CARTE</button>
+          </div>
+        </div>
+      )}
+
+      {s.awaitingTrump && myTurn && (s.modeKey !== "chosenTrump" || blindDecided) && (
+        <div className="trump-picker">
+          <div className="tp-title">SCEGLI IL SEME DI BRISCOLA{s.blindBy === s.youSeat ? " (AL BUIO)" : ""}</div>
           <div className="tp-suits">
             {SUITS.map((su) => (
               <button key={su} className={`tp-suit ${SUIT_RED[su] ? "red" : "black"}`}
@@ -397,13 +530,17 @@ function Game({ state: s, pid, guardedAct, onPlay, onTrump, onPass, onNext, onLe
       <div className="ck-hand">
         <div className="hand-label">LE TUE CARTE{s.modeKey === "domino" && <em> — gioca i 7 e le carte adiacenti</em>}</div>
         <div className="hand-cards">
-          {(s.myHand || []).map((c) => {
-            const playable = myTurn && !s.awaitingTrump && myValid.includes(c.id);
-            return (
-              <Card key={c.id} card={c} highlight={highlight(c)} dim={myTurn && !playable}
-                onClick={playable ? () => guardedAct(s, () => onPlay(c.id)) : undefined} disabled={!playable} />
-            );
-          })}
+          {s.myHandHidden ? (
+            (s.myHand || []).map((c) => <Card key={c.id} faceDown />)
+          ) : (
+            (s.myHand || []).map((c) => {
+              const playable = myTurn && !s.awaitingTrump && myValid.includes(c.id);
+              return (
+                <Card key={c.id} card={c} highlight={highlight(c)} dim={myTurn && !playable}
+                  onClick={playable ? () => guardedAct(s, () => onPlay(c.id)) : undefined} disabled={!playable} />
+              );
+            })
+          )}
           {s.modeKey === "domino" && myTurn && myValid.length === 0 && (
             <button className="pass-btn" onClick={() => guardedAct(s, onPass)}>PASSA</button>
           )}
@@ -478,7 +615,8 @@ function EndScreen({ s, isOwner, onNext, onLeave }) {
 }
 
 /* ---------------- CARD / DOMINO ---------------- */
-function Card({ card, onClick, disabled, small, highlight, dim }) {
+function Card({ card, onClick, disabled, small, highlight, dim, faceDown }) {
+  if (faceDown) return <div className={`ck-card back ${small ? "small" : ""}`} aria-hidden />;
   const red = SUIT_RED[card.suit];
   return (
     <button className={`ck-card ${small ? "small" : ""} ${red ? "red" : "black"} ${disabled ? "disabled" : ""} ${highlight ? "danger" : ""} ${dim ? "dim" : ""}`}
@@ -643,6 +781,50 @@ function Style() {
     .tp-suit { width:84px; padding:14px 0; border-radius:12px; border:1px solid rgba(217,178,95,.4);
       background:var(--paper); color:var(--ink); font-weight:600; display:flex; flex-direction:column; gap:4px; align-items:center; }
     .tp-suit.red { color:var(--danger); } .tp-suit span { font-size:28px; }
+    .tp-sub { font-size:13px; color:#cde; margin:-4px auto 14px; max-width:320px; line-height:1.4; }
+    .blind-choice { display:flex; gap:12px; justify-content:center; flex-wrap:wrap; }
+    .blind-yes, .blind-no { padding:14px 22px; border-radius:12px; font-weight:700; font-size:15px; border:none; cursor:pointer; }
+    .blind-yes { background:linear-gradient(135deg,#d9b25f,#c39b42); color:#2a1f06; box-shadow:0 4px 12px rgba(217,178,95,.4); }
+    .blind-no { background:rgba(255,255,255,.1); color:#e8eef0; border:1px solid rgba(255,255,255,.25); }
+
+    /* sorteggio */
+    .draw-box { background:rgba(0,0,0,.28); border:1px solid rgba(217,178,95,.35); border-radius:20px;
+      padding:32px 28px; width:min(440px,94vw); text-align:center; margin:auto; }
+    .draw-title { font-size:34px; color:var(--gold); margin:0 0 4px; }
+    .draw-sub { color:#cde; font-size:15px; margin-bottom:24px; min-height:22px; }
+    .draw-slots { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+    .draw-slot { display:flex; flex-direction:column; align-items:center; gap:8px; padding:22px 12px;
+      border-radius:14px; background:rgba(255,255,255,.05); border:2px solid transparent; transition:.15s; }
+    .draw-slot .draw-ava { font-size:34px; } .draw-slot .draw-name { font-size:16px; font-weight:600; color:#e8eef0; }
+    .draw-slot.hot { background:rgba(217,178,95,.2); border-color:var(--gold); transform:scale(1.05); box-shadow:0 0 24px rgba(217,178,95,.4); }
+    .draw-slot.won { background:linear-gradient(135deg,#d9b25f,#c39b42); border-color:#fff; transform:scale(1.1); box-shadow:0 0 40px rgba(217,178,95,.7); }
+    .draw-slot.won .draw-name { color:#2a1f06; }
+
+    /* selezione mani */
+    .btn.ghost { background:rgba(255,255,255,.08); color:#e8eef0; border:1px solid rgba(217,178,95,.35); }
+    .settings-overlay { position:fixed; inset:0; z-index:200; background:rgba(0,0,0,.6);
+      display:flex; align-items:center; justify-content:center; padding:16px; }
+    .settings-box { background:#0f3d28; border:1px solid rgba(217,178,95,.4); border-radius:18px;
+      width:min(430px,96vw); max-height:88vh; display:flex; flex-direction:column; overflow:hidden; }
+    .settings-head { display:flex; align-items:center; justify-content:space-between; padding:18px 20px 10px; }
+    .settings-head h3 { margin:0; font-size:24px; color:var(--gold); }
+    .settings-close { background:none; border:none; color:#cde; font-size:20px; cursor:pointer; }
+    .settings-actions { display:flex; gap:8px; padding:0 20px 12px; }
+    .settings-actions button { flex:1; background:rgba(255,255,255,.08); color:#e8eef0;
+      border:1px solid rgba(255,255,255,.15); border-radius:9px; padding:8px; font-size:13px; cursor:pointer; }
+    .mode-list-sel { overflow-y:auto; padding:4px 12px; display:flex; flex-direction:column; gap:4px; }
+    .mode-item { display:flex; align-items:center; gap:10px; padding:11px 12px; border-radius:11px; cursor:pointer;
+      background:rgba(255,255,255,.04); border:1px solid transparent; }
+    .mode-item.on { background:rgba(217,178,95,.14); border-color:rgba(217,178,95,.4); }
+    .mode-item input { width:20px; height:20px; accent-color:var(--gold); }
+    .mode-num { width:24px; height:24px; border-radius:50%; background:rgba(255,255,255,.1); color:#bcd;
+      display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:700; }
+    .mode-item.on .mode-num { background:var(--gold); color:#2a1f06; }
+    .mode-name { flex:1; font-size:15px; color:#eef4f0; }
+    .mode-check { color:var(--gold); font-weight:700; }
+    .settings-foot { display:flex; align-items:center; justify-content:space-between; padding:14px 20px;
+      border-top:1px solid rgba(255,255,255,.1); }
+    .settings-foot span { font-size:13px; color:#bcd; }
 
     .domino-board { background:rgba(0,0,0,.2); border-radius:12px; padding:12px; width:min(340px,78vw); }
     .domino-row { display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid rgba(255,255,255,.08); }

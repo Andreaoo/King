@@ -267,8 +267,15 @@ export class GameRoom {
       this.emit();
       this.scheduleBot();
     } else {
+      // presa completa: prima mostro le 4 carte, poi animo la raccolta verso il vincitore
       this.emit();
-      setTimeout(() => this.resolveCurrentTrick(), 900);
+      const winner = resolveTrick(this.table, this.trump);
+      setTimeout(() => {
+        if (this.status !== "playing" || this.table.length < 4) return;
+        this.collecting = winner; // il client anima le carte che convergono e volano dal vincitore
+        this.emit();
+      }, 700);
+      setTimeout(() => this.resolveCurrentTrick(), 1600);
     }
   }
 
@@ -295,6 +302,7 @@ export class GameRoom {
     this.tricksWon[winner] += 1;
     this.message = `${this.players[winner].name} vince la presa${pts ? ` (${pts > 0 ? "+" : ""}${pts})` : ""}`;
     this.table = [];
+    this.collecting = null;
     this.trickNumber += 1;
 
     // fine anticipata: se tutte le penalità sono state raccolte, la mano finisce
@@ -458,6 +466,7 @@ export class GameRoom {
       isTrickMode: this.mode.trick !== false,
       trump: this.mode.hidden ? null : this.trump, // briscola nascosta non inviata
       table: this.table,
+      collecting: this.collecting ?? null, // seat vincitore mentre le carte si raccolgono
       turn: this.turn,
       trickNumber: this.trickNumber,
       handScores: this.handScores,

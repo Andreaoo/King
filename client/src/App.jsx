@@ -13,6 +13,9 @@ const SUIT_NAME = { hearts: "Cuori", diamonds: "Quadri", clubs: "Fiori", spades:
 const SUIT_RED = { hearts: true, diamonds: true, clubs: false, spades: false };
 const RANKS = ["2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K", "A"];
 const RANK_LABEL = { "10": "10", J: "J", Q: "Q", K: "K", A: "A" };
+// ordine specifico del Domino: l'Asso è la carta più bassa (sotto il 2)
+const DOMINO_RANKS = ["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"];
+const dominoValue = (r) => DOMINO_RANKS.indexOf(r);
 const rv = (r) => RANKS.indexOf(r);
 const LAYOUT = ["bottom", "left", "top", "right"];
 
@@ -398,14 +401,12 @@ function Lobby({ state, pid, onStart, onConfig, onLeave }) {
 const MODE_TITLES = {
   noKingsJacks: "No Re e Fanti", noQueens: "No Donne", no8Diamonds: "No 8 di Quadri",
   noKingHearts: "No K di Cuori", noHearts: "No Cuori", lastTwoTricks: "Ultime Due Prese",
-  noTricks: "No Prese", domino: "Domino", chosenTrump: "Seme scelto", hiddenTrump: "Briscola non dichiarata",
+  noTricks: "No Prese", domino: "Domino", chosenTrump: "Seme scelto", hiddenTrump: "Senza Briscola",
 };
 
 /* ---------------- GAME ---------------- */
 function Game({ state: s, pid, guardedAct, onPlay, onTrump, onBlind, onPass, onNext, onLeave }) {
-  const [blindDecided, setBlindDecided] = useState(false);
   const [showSidebar, setShowSidebar] = useState(false);
-  useEffect(() => { setBlindDecided(false); }, [s.modeIndex]); // reset a ogni mano
   const seat = s.youSeat;
   const myTurn = s.turn === seat;
   const isOwner = s.ownerId === pid;
@@ -418,7 +419,7 @@ function Game({ state: s, pid, guardedAct, onPlay, onTrump, onBlind, onPass, onN
       return s.myHand.filter((c) => {
         const b = s.dominoBoard[c.suit];
         if (!b) return c.rank === "7";
-        const v = rv(c.rank);
+        const v = dominoValue(c.rank);
         return v === b.high + 1 || v === b.low - 1;
       }).map((c) => c.id);
     }
@@ -454,10 +455,10 @@ function Game({ state: s, pid, guardedAct, onPlay, onTrump, onBlind, onPass, onN
         <div className="ck-status">
           <span><b>Mano</b> {s.modeIndex + 1}/{s.totalModes} — {s.modeShort}</span>
           <span><b>Presa</b> {Math.min(s.trickNumber + 1, 13)}/13</span>
-          {s.trump && !s.hidden && (
+          {s.trump && (
             <span className={SUIT_RED[s.trump] ? "trump red" : "trump"}><b>Briscola</b> {SUIT_SYMBOL[s.trump]} {SUIT_NAME[s.trump]}</span>
           )}
-          {s.hidden && <span className="trump hidden"><b>Briscola</b> ??</span>}
+          {!s.trump && s.isTrickMode && s.modeKey === "hiddenTrump" && <span className="trump hidden"><b>Senza briscola</b></span>}
         </div>
         <button className="ck-exit" onClick={() => { if (confirm("Uscire dalla partita?")) onLeave(); }}>✕ Esci</button>
       </div>
@@ -541,18 +542,18 @@ function Game({ state: s, pid, guardedAct, onPlay, onTrump, onBlind, onPass, onN
         </div>
       </div>
 
-      {s.awaitingTrump && myTurn && s.modeKey === "chosenTrump" && !blindDecided && (
+      {s.awaitingTrump && myTurn && s.modeKey === "chosenTrump" && s.blindDecision == null && (
         <div className="trump-picker">
           <div className="tp-title">VUOI GIOCARE AL BUIO?</div>
           <div className="tp-sub">Scegli il seme senza vedere le carte e guadagni punti doppi (+2 a presa)</div>
           <div className="blind-choice">
-            <button className="blind-yes" onClick={() => { onBlind(true); setBlindDecided(true); }}>SÌ, AL BUIO</button>
-            <button className="blind-no" onClick={() => { onBlind(false); setBlindDecided(true); }}>NO, VEDO LE CARTE</button>
+            <button className="blind-yes" onClick={() => onBlind(true)}>SÌ, AL BUIO</button>
+            <button className="blind-no" onClick={() => onBlind(false)}>NO, VEDO LE CARTE</button>
           </div>
         </div>
       )}
 
-      {s.awaitingTrump && myTurn && (s.modeKey !== "chosenTrump" || blindDecided) && (
+      {s.awaitingTrump && myTurn && (s.modeKey !== "chosenTrump" || s.blindDecision != null) && (
         <div className="trump-picker">
           <div className="tp-title">SCEGLI IL SEME DI BRISCOLA{s.blindBy === s.youSeat ? " (AL BUIO)" : ""}</div>
           <div className="tp-suits">
@@ -670,15 +671,15 @@ function Card({ card, onClick, disabled, small, highlight, dim, faceDown }) {
 }
 
 function DominoBoard({ board }) {
-  const sevenIdx = RANKS.indexOf("7");
+  const sevenIdx = DOMINO_RANKS.indexOf("7");
   return (
     <div className="domino-board">
       {SUITS.map((s) => {
         const b = board[s];
         const started = !!b;
         // carta più bassa e più alta giocate (oltre al 7 centrale)
-        const lowLabel = started && b.low < sevenIdx ? (RANK_LABEL[RANKS[b.low]] || RANKS[b.low]) : null;
-        const highLabel = started && b.high > sevenIdx ? (RANK_LABEL[RANKS[b.high]] || RANKS[b.high]) : null;
+        const lowLabel = started && b.low < sevenIdx ? (RANK_LABEL[DOMINO_RANKS[b.low]] || DOMINO_RANKS[b.low]) : null;
+        const highLabel = started && b.high > sevenIdx ? (RANK_LABEL[DOMINO_RANKS[b.high]] || DOMINO_RANKS[b.high]) : null;
         return (
           <div key={s} className={`domino-row ${SUIT_RED[s] ? "red" : "black"} ${started ? "" : "waiting"}`}>
             <span className="ds">{SUIT_SYMBOL[s]}</span>
@@ -919,41 +920,31 @@ function Style() {
     .settings-foot .btn { min-width:110px; }
 
     /* CARDS */
-    .ck-card { position:relative; width:132px; height:190px; border-radius:16px;
-      background:linear-gradient(160deg, #ffffff 0%, #f2f4f8 100%);
-      border:none; box-shadow:0 6px 16px rgba(0,0,0,.35), inset 0 0 0 1px rgba(255,255,255,.9), inset 0 0 0 2px rgba(20,30,50,.06);
-      color:#1a2233;
-      display:flex; align-items:center; justify-content:center; transition:transform .14s cubic-bezier(.2,.8,.3,1), box-shadow .2s; padding:0;
-      -webkit-tap-highlight-color:transparent; }
-    .ck-card.small { width:106px; height:152px; border-radius:13px; }
-    .ck-card.red { color:#e02a3c; }
-    .ck-card.black { color:#1a2233; }
-    .ck-card .pip { font-size:84px; line-height:1; filter:drop-shadow(0 1px 1px rgba(0,0,0,.12)); }
-    .ck-card.small .pip { font-size:64px; }
-    .ck-card .corner { position:absolute; font-size:31px; font-weight:800; line-height:.95; text-align:center; letter-spacing:-.02em; }
-    .ck-card.small .corner { font-size:25px; }
-    .ck-card .corner.tl { top:8px; left:10px; }
-    .ck-card .corner.br { bottom:8px; right:10px; transform:rotate(180deg); }
-    .ck-card.back {
-      background:
-        radial-gradient(circle at 50% 50%, rgba(217,178,95,.25) 0%, transparent 60%),
-        repeating-linear-gradient(45deg,#12432c,#12432c 7px,#0d3623 7px,#0d3623 14px);
-      box-shadow:0 6px 16px rgba(0,0,0,.4), inset 0 0 0 2px rgba(217,178,95,.55), inset 0 0 0 4px rgba(13,54,35,1); }
-    .ck-card:not(.disabled):not(.back):hover { transform:translateY(-16px) scale(1.03);
-      box-shadow:0 20px 34px rgba(0,0,0,.5), inset 0 0 0 1px rgba(255,255,255,.9), inset 0 0 0 2px rgba(20,30,50,.06); }
+    .ck-card { position:relative; width:64px; height:92px; border-radius:8px; background:var(--paper);
+      border:1px solid #cbb; box-shadow:0 3px 8px rgba(0,0,0,.3); color:var(--ink);
+      display:flex; align-items:center; justify-content:center; transition:transform .12s, box-shadow .2s; padding:0; }
+    .ck-card.small { width:52px; height:74px; }
+    .ck-card.red { color:var(--danger); }
+    .ck-card .pip { font-size:30px; }
+    .ck-card.small .pip { font-size:22px; }
+    .ck-card .corner { position:absolute; font-size:11px; font-weight:700; line-height:1; text-align:center; }
+    .ck-card .corner.tl { top:5px; left:5px; }
+    .ck-card .corner.br { bottom:5px; right:5px; transform:rotate(180deg); }
+    .ck-card.back { background:repeating-linear-gradient(45deg,#7a1f2b,#7a1f2b 6px,#5c1520 6px,#5c1520 12px);
+      border:1px solid #4a1018; }
+    .ck-card:not(.disabled):hover { transform:translateY(-10px); box-shadow:0 10px 20px rgba(0,0,0,.4); }
     .ck-card.disabled { cursor:default; }
-    .ck-card.dim { opacity:.45; filter:grayscale(.5) brightness(.92); }
-    .ck-card.danger { box-shadow:0 6px 16px rgba(0,0,0,.35), inset 0 0 0 3px #e02a3c; }
-    .ck-card.danger::before { content:'!'; position:absolute; top:-10px; right:-8px; width:24px; height:24px;
-      background:#e02a3c; color:#fff; border-radius:50%; font-size:15px; font-weight:800; display:flex; align-items:center; justify-content:center;
-      box-shadow:0 2px 6px rgba(224,42,60,.5); }
+    .ck-card.dim { opacity:.4; filter:grayscale(.4); }
+    .ck-card.danger { outline:2px solid var(--danger); outline-offset:-2px; }
+    .ck-card.danger::before { content:'!'; position:absolute; top:-8px; right:-6px; width:16px; height:16px;
+      background:var(--danger); color:#fff; border-radius:50%; font-size:11px; display:flex; align-items:center; justify-content:center; }
 
     /* HAND */
-    .ck-hand { margin-top:16px; text-align:center; }
-    .hand-label { font-size:15px; letter-spacing:.2em; color:var(--gold); margin-bottom:12px; }
+    .ck-hand { margin-top:12px; text-align:center; }
+    .hand-label { font-size:11px; letter-spacing:.2em; color:var(--gold); margin-bottom:8px; }
     .hand-label em { color:#bcd; font-style:normal; text-transform:none; letter-spacing:0; }
-    .hand-cards { display:flex; gap:10px; justify-content:center; flex-wrap:wrap; }
-    .pass-btn { background:var(--gold); color:#2a1f06; border:none; border-radius:10px; padding:0 28px; font-weight:700; font-size:18px; }
+    .hand-cards { display:flex; gap:6px; justify-content:center; flex-wrap:wrap; }
+    .pass-btn { background:var(--gold); color:#2a1f06; border:none; border-radius:10px; padding:0 20px; font-weight:700; }
 
     /* TRUMP PICKER */
     .trump-picker { text-align:center; margin:10px 0; }
@@ -1037,16 +1028,8 @@ function Style() {
     .final-list .pn { flex:1; text-align:left; }
 
     @media (max-width:780px) {
-      .ck-card { width:92px; height:132px; } .ck-card .pip { font-size:48px; }
-      .ck-card.small { width:78px; height:112px; } .ck-card.small .pip { font-size:38px; }
-      .ck-card .corner { font-size:18px; }
-      .ck-table { min-height:520px; }
-      .played { width:320px; height:260px; }
+      .ck-card { width:44px; height:64px; } .ck-card .pip { font-size:20px; }
       .home-title { font-size:48px; }
-    }
-    @media (max-width:400px) {
-      .ck-card { width:64px; height:92px; } .ck-card .pip { font-size:32px; }
-      .hand-cards { gap:6px; }
     }
     `}</style>
   );

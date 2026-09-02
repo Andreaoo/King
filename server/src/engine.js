@@ -37,8 +37,8 @@ export const CONFIG = {
     domino: { title: "Domino", short: "DOMINO", trick: false },
     chosenTrump: { title: "Seme scelto", short: "SEME SCELTO", trick: true, positive: true,
       penalty: () => 0, trickPenalty: () => +1 },
-    hiddenTrump: { title: "Briscola non dichiarata", short: "BRISCOLA NASCOSTA", trick: true,
-      positive: true, hidden: true, penalty: () => 0, trickPenalty: () => +2 },
+    hiddenTrump: { title: "Senza Briscola", short: "SENZA BRISCOLA", trick: true,
+      positive: true, penalty: () => 0, trickPenalty: () => +2 },
   },
 };
 
@@ -96,11 +96,16 @@ export function resolveTrick(table, trump) {
   }
   return best.player;
 }
+// Ordine specifico del DOMINO: l'Asso è la carta più bassa (sotto il 2).
+// Sequenza: A(0)-2-3-4-5-6-7-8-9-10-J-Q-K(12). Il 7 resta il centro di partenza.
+export const DOMINO_RANKS = ["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"];
+export const dominoValue = (r) => DOMINO_RANKS.indexOf(r);
+
 export function dominoValidCards(hand, board) {
   return hand.filter((c) => {
     const b = board[c.suit];
     if (!b) return c.rank === "7";
-    const v = rankValue(c.rank);
+    const v = dominoValue(c.rank);
     return v === b.high + 1 || v === b.low - 1;
   });
 }
@@ -219,11 +224,10 @@ export function botChooseCard(hand, valid, table, trump, mode, difficulty, ctx) 
     return pool.sort((a, b) => cardPenalty(a) - cardPenalty(b))[0];
   }
 
-  // ===================== ESTREMO: ricerca del caso peggiore =====================
-  // Onesto (non vede le carte altrui), ma valuta ogni mossa simulando il
-  // completamento della presa contro le risposte peggiori possibili degli
-  // avversari (minimax sul worst-case) e stima il rischio residuo della mano.
-  if (difficulty === "extreme") {
+  // "Difficile" usa la logica più forte (ex-Estremo): conta le carte uscite,
+  // sa quando una carta è imbattibile, si libera al momento giusto delle carte
+  // pericolose. Onesto: non vede le carte degli avversari.
+  if (difficulty === "hard" || difficulty === "extreme") {
     return extremeChoose(hand, valid, table, trump, cfg, ctx, positive);
   }
 
@@ -308,8 +312,8 @@ export function botChooseTrump(hand, difficulty) {
   const count = {};
   for (const s of SUITS) { strength[s] = 0; count[s] = 0; }
   for (const c of hand) { strength[c.suit] += 1 + rankValue(c.rank) * 0.3; count[c.suit]++; }
-  if (difficulty === "extreme") {
-    // extreme: privilegia il seme lungo E forte (una briscola lunga domina la mano)
+  if (difficulty === "extreme" || difficulty === "hard") {
+    // privilegia il seme lungo E forte (una briscola lunga domina la mano)
     for (const s of SUITS) strength[s] += count[s] * count[s] * 0.4;
   }
   return SUITS.sort((a, b) => strength[b] - strength[a])[0];

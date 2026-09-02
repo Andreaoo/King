@@ -3,7 +3,7 @@
 // verità: i client inviano intenzioni, il server valida ed emette lo stato.
 // ============================================================================
 import {
-  CONFIG, SUITS, RANKS, rankValue, createDeck, shuffleDeck, dealCards,
+  CONFIG, SUITS, RANKS, rankValue, dominoValue, DOMINO_RANKS, createDeck, shuffleDeck, dealCards,
   validTrickMoves, updateBrokenSuits, resolveTrick, dominoValidCards,
   botChooseCard, botChooseTrump, botDecidesReshuffle,
 } from "./engine.js";
@@ -40,6 +40,7 @@ export class GameRoom {
     this.penaltyCardsSeen = 0;    // carte penalizzanti raccolte (fine anticipata)
     this.protectedSuit = null;    // seme non apribile finché non spezzato
     this.blindBy = null;          // seat che gioca "al buio" (punti doppi)
+    this.blindDecision = null;    // null=deve decidere, true=al buio, false=vede le carte
     this.message = "";
     this.botTimer = null;
   }
@@ -177,6 +178,7 @@ export class GameRoom {
     this.brokenSuits = new Set();
     this.penaltyCardsSeen = 0;
     this.blindBy = null;
+    this.blindDecision = null;
     const key = this.modeKey;
     // seme protetto (spezzare): dal CONFIG, o la briscola per le mani positive
     this.protectedSuit = this.mode.protectedSuit || null;
@@ -196,9 +198,9 @@ export class GameRoom {
         this.message = "In attesa della scelta della briscola";
       }
     } else if (key === "hiddenTrump") {
-      this.trump = SUITS[Math.floor(Math.random() * 4)]; // nascosta ai client
-      this.protectedSuit = null; // niente spezzare: il seme di briscola è sconosciuto ai giocatori
-      this.message = "Briscola nascosta";
+      this.trump = null;           // senza briscola: comanda solo il seme di chi apre
+      this.protectedSuit = null;   // niente spezzare
+      this.message = "Senza briscola: comanda il seme di chi apre";
     } else if (key === "domino") {
       // domino: inizia chi ha il 7 di denari (eccezione, non rompe la rotazione)
       const s = dealt.findIndex((h) => h.some((c) => c.rank === "7" && c.suit === "diamonds"));
@@ -239,6 +241,7 @@ export class GameRoom {
     if (!this.awaitingTrump) return;
     const p = this.players[this.turn];
     if (p.id !== playerId) return;
+    this.blindDecision = !!yes;
     if (yes) this.blindBy = this.turn;
     this.message = yes ? "Al buio! Scegli il seme" : "Scegli il seme";
     this.emit();
@@ -321,7 +324,7 @@ export class GameRoom {
     const card = hand.find((c) => c.id === cardId);
     if (!card || !valid.some((c) => c.id === cardId)) return;
     const b = this.dominoBoard[card.suit];
-    const v = RANKS.indexOf(card.rank);
+    const v = dominoValue(card.rank);
     this.dominoBoard[card.suit] = b ? { low: Math.min(b.low, v), high: Math.max(b.high, v) } : { low: v, high: v };
     this.hands[seat] = hand.filter((c) => c.id !== cardId);
     if (this.hands[seat].length === 0) {
@@ -422,7 +425,7 @@ export class GameRoom {
       const ctx = { trickNumber: this.trickNumber, totalTricks: 13 };
       const card = botChooseCard(this.hands[seat], valid, this.table, this.trump, this.modeKey, p.difficulty, ctx);
       this.playCard(p.id, card.id);
-    }, 700);
+    }, 1400);
   }
 
   // Watchdog anti-stallo: rilancia il driver SOLO se il turno è di un bot fermo
@@ -474,6 +477,7 @@ export class GameRoom {
       tricksWon: this.tricksWon,
       awaitingTrump: this.awaitingTrump,
       blindBy: this.blindBy,              // chi gioca al buio
+      blindDecision: this.blindDecision,  // null=deve decidere, true=al buio, false=vede
       protectedSuit: this.mode.hidden ? null : this.protectedSuit, // seme non apribile (nascosto se briscola hidden)
       brokenSuits: [...this.brokenSuits], // semi già spezzati (array per serializzazione)
       dominoBoard: this.dominoBoard,
@@ -481,7 +485,7 @@ export class GameRoom {
       notice: this.notice || null,
       closedByMaster: !!this.closedByMaster,
       // al buio: la mia mano è coperta finché non ho scelto il seme
-      myHandHidden: (this.modeKey === "chosenTrump" && this.awaitingTrump && this.turn === seat && this.blindBy === seat),
+      myHandHidden: (this.modeKey === "chosenTrump" && this.awaitingTrump && this.turn === seat && this.blindDecision !== false),
       myHand: seat >= 0 ? this.hands[seat] : [],
     };
   }

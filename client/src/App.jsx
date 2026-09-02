@@ -507,7 +507,7 @@ function Game({ state: s, pid, guardedAct, onPlay, onTrump, onBlind, onPass, onN
 
       <div className="ck-table">
         {s.players.map((p, i) => (
-          <div key={i} className={`seat ${seatOf(i)} ${s.turn === i ? "active" : ""}`}>
+          <div key={i} className={`seat ${seatOf(i)} ${s.turn === i ? "active" : ""} ${s.collecting === i ? "won" : ""}`}>
             <div className="seat-name">{p.bot ? "🤖" : "👤"} {p.name}{i === seat ? " (tu)" : ""}{!p.connected && " 🔌"}</div>
             <div className="seat-meta">
               {s.isTrickMode && <span>Prese: {s.tricksWon[i]}</span>}
@@ -528,7 +528,7 @@ function Game({ state: s, pid, guardedAct, onPlay, onTrump, onBlind, onPass, onN
             <DominoBoard board={s.dominoBoard} />
           ) : (
             <div className={`played ${s.collecting != null ? "collecting phase-fly" : ""}`}>
-              {s.table.length === 0 && <div className="ck-msg">{s.message}</div>}
+              {s.table.length === 0 && s.collecting == null && <div className="ck-msg">{s.message}</div>}
               {s.table.map((t, i) => (
                 <div key={i}
                   className={`played-card seat-${seatOf(t.player)} ${s.collecting != null ? `fly-to-${seatOf(s.collecting)}` : ""} ${s.collecting === t.player ? "winner-card" : ""}`}>
@@ -536,6 +536,12 @@ function Game({ state: s, pid, guardedAct, onPlay, onTrump, onBlind, onPass, onN
                   <span className="pc-name">{s.players[t.player].name}</span>
                 </div>
               ))}
+              {s.collecting != null && (
+                <div className="trick-winner">
+                  <span className="tw-name">{s.players[s.collecting].name}</span>
+                  {s.collectingPts ? <span className={`tw-pts ${s.collectingPts > 0 ? "pos" : "neg"}`}>{s.collectingPts > 0 ? "+" : ""}{s.collectingPts}</span> : null}
+                </div>
+              )}
             </div>
           )}
           {myTurn && !s.awaitingTrump && <div className="your-turn">È IL TUO TURNO</div>}
@@ -836,6 +842,24 @@ function Style() {
     .seat { position:absolute; text-align:center; font-size:15px; transition:.2s; }
     .seat .seat-name { font-weight:600; }
     .seat.active .seat-name { color:var(--gold); text-shadow:0 0 12px rgba(217,178,95,.6); }
+    /* giocatore che vince la presa: illuminato in verde con alone */
+    .seat.won { animation:seatWon .5s ease; }
+    .seat.won .seat-name { color:#7CFC9A; text-shadow:0 0 16px rgba(124,252,154,.9); font-weight:800; }
+    .seat.won::after { content:''; position:absolute; inset:-8px -12px; border:2px solid #7CFC9A;
+      border-radius:14px; box-shadow:0 0 24px rgba(124,252,154,.6); animation:seatWonGlow .6s ease infinite alternate; }
+    @keyframes seatWon { 0%{ transform:scale(1);} 40%{ transform:scale(1.12);} 100%{ transform:scale(1);} }
+    @keyframes seatWonGlow { to { box-shadow:0 0 34px rgba(124,252,154,.9); } }
+
+    /* badge centrale col nome del vincitore + punti */
+    .trick-winner { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
+      display:flex; flex-direction:column; align-items:center; gap:4px; z-index:40; pointer-events:none;
+      animation:twPop .35s cubic-bezier(.2,1.4,.4,1); }
+    .tw-name { font-size:22px; font-weight:800; color:#fff; text-shadow:0 2px 8px rgba(0,0,0,.7);
+      background:rgba(12,51,32,.85); padding:6px 18px; border-radius:20px; border:1px solid rgba(124,252,154,.5); white-space:nowrap; }
+    .tw-pts { font-size:26px; font-weight:800; }
+    .tw-pts.pos { color:#7CFC9A; text-shadow:0 0 12px rgba(124,252,154,.7); }
+    .tw-pts.neg { color:#ff7676; text-shadow:0 0 12px rgba(255,118,118,.7); }
+    @keyframes twPop { 0%{ transform:translate(-50%,-50%) scale(.5); opacity:0; } 100%{ transform:translate(-50%,-50%) scale(1); opacity:1; } }
     .seat.active::after { content:''; position:absolute; inset:-6px -10px; border:1px solid var(--gold);
       border-radius:12px; opacity:.6; }
     .seat-meta { display:flex; gap:12px; justify-content:center; font-size:13px; color:#cde; }

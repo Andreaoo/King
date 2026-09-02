@@ -273,9 +273,16 @@ export class GameRoom {
       // presa completa: prima mostro le 4 carte, poi animo la raccolta verso il vincitore
       this.emit();
       const winner = resolveTrick(this.table, this.trump);
+      // calcolo i punti che questa presa assegna (per mostrarli sul vincitore)
+      const ctx = { trickNumber: this.trickNumber, totalTricks: 13 };
+      let pts = 0;
+      for (const p of this.table) pts += this.mode.penalty ? this.mode.penalty(p.card) : 0;
+      if (this.mode.trickPenalty) pts += this.mode.trickPenalty(ctx);
+      if (this.blindBy !== null && winner === this.blindBy && this.mode.positive) pts *= 2;
       setTimeout(() => {
         if (this.status !== "playing" || this.table.length < 4) return;
-        this.collecting = winner; // il client anima le carte che convergono e volano dal vincitore
+        this.collecting = winner;   // il client illumina il vincitore e anima le carte
+        this.collectingPts = pts;   // punti incassati in questa presa
         this.emit();
       }, 700);
       setTimeout(() => this.resolveCurrentTrick(), 1600);
@@ -306,6 +313,7 @@ export class GameRoom {
     this.message = `${this.players[winner].name} vince la presa${pts ? ` (${pts > 0 ? "+" : ""}${pts})` : ""}`;
     this.table = [];
     this.collecting = null;
+    this.collectingPts = 0;
     this.trickNumber += 1;
 
     // fine anticipata: se tutte le penalità sono state raccolte, la mano finisce
@@ -470,6 +478,7 @@ export class GameRoom {
       trump: this.mode.hidden ? null : this.trump, // briscola nascosta non inviata
       table: this.table,
       collecting: this.collecting ?? null, // seat vincitore mentre le carte si raccolgono
+      collectingPts: this.collectingPts ?? 0, // punti incassati nella presa
       turn: this.turn,
       trickNumber: this.trickNumber,
       handScores: this.handScores,

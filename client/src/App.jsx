@@ -285,7 +285,64 @@ function Home({ view, setView, name, setName, difficulty, setDifficulty, joinCod
         </>
       )}
       {error && <p className="err">{error}</p>}
+      <InstallHint />
       <p className="home-note">Condividi il codice stanza con gli amici. I posti liberi vengono riempiti da bot quando il proprietario avvia.</p>
+    </div>
+  );
+}
+
+/* ---------------- INSTALLA SULLA HOME ---------------- */
+// icona "Condividi" di iOS (quadrato con freccia), disegnata inline così è sempre nitida
+function ShareIcon() {
+  return (
+    <svg className="ih-share" viewBox="0 0 24 24" width="16" height="16" fill="none"
+      stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M12 15V3" /><path d="M8 7l4-4 4 4" />
+      <path d="M4 13v6a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-6" />
+    </svg>
+  );
+}
+
+const isIOS = () =>
+  /iP(hone|ad|od)/.test(navigator.userAgent) ||
+  (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1); // iPadOS si spaccia per Mac
+const isStandalone = () =>
+  window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true;
+
+// iOS non espone alcun prompt di installazione: va spiegato dove toccare.
+// Android/Chrome invece emette "beforeinstallprompt" e possiamo mostrare un pulsante.
+function InstallHint() {
+  const [dismissed, setDismissed] = useState(() => localStorage.getItem("ck_installhint") === "off");
+  const [deferred, setDeferred] = useState(null);
+
+  useEffect(() => {
+    const on = (e) => { e.preventDefault(); setDeferred(e); };
+    window.addEventListener("beforeinstallprompt", on);
+    return () => window.removeEventListener("beforeinstallprompt", on);
+  }, []);
+
+  if (dismissed || isStandalone()) return null;          // già installata: niente avviso
+  if (!isIOS() && !deferred) return null;                // browser che non sa installare
+
+  const close = () => { localStorage.setItem("ck_installhint", "off"); setDismissed(true); };
+
+  return (
+    <div className="install-hint">
+      <button className="ih-close" onClick={close} aria-label="Chiudi">✕</button>
+      <div className="ih-title">📲 Installa Cart King</div>
+      {isIOS() ? (
+        <p className="ih-text">
+          Tocca <b>Condividi</b> <ShareIcon /> nella barra di Safari,
+          poi <b>Aggiungi a Home</b>. Il gioco si apre a schermo intero, senza barre del browser.
+        </p>
+      ) : (
+        <>
+          <p className="ih-text">Aggiungi il gioco alla schermata principale come una vera app.</p>
+          <button className="btn primary" onClick={async () => { deferred.prompt(); await deferred.userChoice; setDeferred(null); }}>
+            INSTALLA
+          </button>
+        </>
+      )}
     </div>
   );
 }
@@ -808,10 +865,21 @@ function Style() {
     .ck-root {
       --felt: #0f5132; --felt2: #0a3d26; --gold: #d9b25f; --gold2: #b8923f;
       --ink: #17140f; --paper: #f6f1e6; --danger: #c0392b; --muted:#8a8577;
-      min-height: 100vh; margin:0; font-family:'Outfit',system-ui,sans-serif;
+      /* aree sicure iPhone: notch/Dynamic Island in alto, barra home in basso */
+      --sat: env(safe-area-inset-top, 0px);  --sab: env(safe-area-inset-bottom, 0px);
+      --sal: env(safe-area-inset-left, 0px); --sar: env(safe-area-inset-right, 0px);
+      min-height: 100vh; min-height: 100dvh; /* dvh: su iOS esclude le barre di Safari */
+      margin:0; font-family:'Outfit',system-ui,sans-serif;
       background: radial-gradient(120% 120% at 50% 0%, #14663f 0%, var(--felt) 45%, var(--felt2) 100%);
       color: var(--paper);
+      /* niente rimbalzo elastico, pull-to-refresh, lampo grigio al tap o zoom al doppio tap */
+      overscroll-behavior: none;
+      -webkit-tap-highlight-color: transparent;
+      -webkit-touch-callout: none;
+      touch-action: manipulation;
     }
+    /* le carte non si selezionano col dito tenuto premuto */
+    .ck-card, .seat, .hand-label, .ck-status { -webkit-user-select:none; user-select:none; }
     .ck-root.center { display:flex; align-items:center; justify-content:center; padding:24px; }
     button { font-family:inherit; cursor:pointer; }
     .neg { color:#ff9d8a; } .pos { color:#9fe0a8; }
@@ -836,6 +904,16 @@ function Style() {
     .home-facts span { font-size:12px; color:#bcd; letter-spacing:.05em; }
     .home-note { font-size:12px; color:#a9c4b3; line-height:1.5; }
 
+    /* avviso "aggiungi alla home" */
+    .install-hint { position:relative; margin:18px 0; padding:14px 16px; text-align:left;
+      background:rgba(217,178,95,.12); border:1px solid rgba(217,178,95,.4); border-radius:14px; }
+    .ih-title { font-size:14px; font-weight:700; color:var(--gold); margin-bottom:6px; }
+    .ih-text { font-size:13px; line-height:1.5; color:#e2ece5; margin:0; }
+    .ih-share { display:inline-block; vertical-align:-3px; margin:0 2px; color:var(--gold); }
+    .ih-close { position:absolute; top:8px; right:8px; width:26px; height:26px; border-radius:7px;
+      background:rgba(255,255,255,.1); border:none; color:#cde; font-size:13px; cursor:pointer; }
+    .install-hint .btn { margin-top:10px; width:100%; padding:11px; font-size:14px; }
+
     /* LOBBY */
     .lobby { background:rgba(0,0,0,.22); border:1px solid rgba(217,178,95,.3); border-radius:18px;
       padding:26px; width:min(420px,92vw); }
@@ -856,8 +934,9 @@ function Style() {
     .seat-row em { color:var(--gold); font-style:normal; font-size:13px; }
 
     /* TOPBAR */
-    .ck-topbar { display:flex; justify-content:space-between; align-items:center; padding:10px 18px;
-      background:rgba(0,0,0,.25); border-bottom:1px solid rgba(217,178,95,.25); flex-wrap:wrap; gap:8px; }
+    .ck-topbar { display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;
+      padding:calc(10px + var(--sat)) calc(18px + var(--sar)) 10px calc(18px + var(--sal));
+      background:rgba(0,0,0,.25); border-bottom:1px solid rgba(217,178,95,.25); }
     .ck-brand { font-family:'Cormorant Garamond',serif; font-size:22px; color:var(--gold); letter-spacing:.08em; }
     .ck-status { display:flex; gap:18px; font-size:15px; flex-wrap:wrap; }
     .ck-status b { color:var(--gold); font-weight:600; margin-right:4px; font-size:13px; letter-spacing:.06em; }
@@ -903,8 +982,15 @@ function Style() {
     .menu-toggle:hover { background:rgba(217,178,95,.2); }
 
     /* TABLE */
+    /* la schermata di gioco riempie esattamente lo schermo: tavolo elastico,
+       mano sempre visibile in fondo senza dover scorrere (indispensabile su telefono) */
+    .game { display:flex; flex-direction:column; height:100vh; height:100dvh; overflow:hidden; }
+    .game .ck-table { flex:1 1 auto; min-height:0; margin:8px 8px 0; }
+    .game .ck-hand { flex:0 0 auto; }
+    .game .ck-topbar, .game .ck-progress { flex:0 0 auto; }
+
     .ck-table-wrap { flex:1; display:flex; flex-direction:column; padding:12px; }
-    .ck-table { position:relative; flex:1; border-radius:20px; min-height:620px;
+    .ck-table { position:relative; flex:1; border-radius:20px; min-height:320px;
       background:radial-gradient(80% 80% at 50% 45%, #157a49 0%, #0e5a34 70%, #0a3d26 100%);
       border:2px solid rgba(217,178,95,.4); box-shadow:inset 0 0 60px rgba(0,0,0,.4); }
     .seat { position:absolute; text-align:center; font-size:15px; transition:.2s; }
@@ -941,7 +1027,8 @@ function Style() {
     .seat-cards .count { font-size:12px; margin-left:6px; color:#bcd; }
 
     .ck-center { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; }
-    .played { position:relative; width:440px; height:350px; }
+    /* l'area delle carte giocate non deve mai uscire dallo schermo */
+    .played { position:relative; width:min(440px, 88vw); height:min(350px, 38vh); }
     .played-card { position:absolute; }
     .played-card .pc-name { display:block; font-size:12px; text-align:center; color:#cde; margin-top:3px; }
     .played-card.seat-bottom { bottom:0; left:50%; transform:translateX(-50%); }
@@ -1024,7 +1111,11 @@ function Style() {
     .ck-card .corner.br { bottom:5px; right:5px; transform:rotate(180deg); }
     .ck-card.back { background:repeating-linear-gradient(45deg,#7a1f2b,#7a1f2b 6px,#5c1520 6px,#5c1520 12px);
       border:1px solid #4a1018; }
-    .ck-card:not(.disabled):hover { transform:translateY(-10px); box-shadow:0 10px 20px rgba(0,0,0,.4); }
+    /* il sollevamento solo dove esiste un vero puntatore: su iPhone :hover resta
+       incollato dopo il tap e la carta rimarrebbe alzata */
+    @media (hover:hover) and (pointer:fine) {
+      .ck-card:not(.disabled):hover { transform:translateY(-10px); box-shadow:0 10px 20px rgba(0,0,0,.4); }
+    }
     .ck-card.disabled { cursor:default; }
     .ck-card.dim { filter:grayscale(.4); }
     .ck-card.danger { outline:2px solid var(--danger); outline-offset:-2px; }
@@ -1032,7 +1123,8 @@ function Style() {
       background:var(--danger); color:#fff; border-radius:50%; font-size:11px; display:flex; align-items:center; justify-content:center; }
 
     /* HAND */
-    .ck-hand { margin-top:12px; text-align:center; }
+    .ck-hand { margin-top:12px; text-align:center;
+      padding:0 calc(6px + var(--sar)) calc(10px + var(--sab)) calc(6px + var(--sal)); }
     .hand-label { font-size:11px; letter-spacing:.2em; color:var(--gold); margin-bottom:8px; }
     .hand-label em { color:#bcd; font-style:normal; text-transform:none; letter-spacing:0; }
     /* mano a ventaglio: carte sovrapposte lungo un arco */
@@ -1049,8 +1141,13 @@ function Style() {
     .fan-slot .ck-card .corner.br { bottom:6%; right:6%; }
     .fan-slot .ck-card { display:block; transition:transform .18s ease, box-shadow .2s; }
     /* il sollevamento sta sulla carta, così non cancella la posa del ventaglio */
-    .fan-slot .ck-card:not(.disabled):hover { transform:translateY(-18px); box-shadow:0 12px 22px rgba(0,0,0,.45); }
-    .fan-slot:has(.ck-card:not(.disabled):hover) { z-index:100 !important; }
+    @media (hover:hover) and (pointer:fine) {
+      .fan-slot .ck-card:not(.disabled):hover { transform:translateY(-18px); box-shadow:0 12px 22px rgba(0,0,0,.45); }
+      .fan-slot:has(.ck-card:not(.disabled):hover) { z-index:100 !important; }
+    }
+    /* al tocco: la carta si alza mentre il dito è premuto (feedback su iPhone) */
+    .fan-slot .ck-card:not(.disabled):active { transform:translateY(-16px); box-shadow:0 12px 22px rgba(0,0,0,.45); }
+    .fan-slot:has(.ck-card:not(.disabled):active) { z-index:100 !important; }
     .pass-btn { background:var(--gold); color:#2a1f06; border:none; border-radius:10px; padding:10px 20px; font-weight:700; }
 
     /* TRUMP PICKER */
@@ -1134,9 +1231,40 @@ function Style() {
     .final-list .rank { font-size:22px; width:30px; }
     .final-list .pn { flex:1; text-align:left; }
 
+    /* stato connessione: pillola piccola in alto a destra, non ruba spazio al tavolo */
+    .conn-banner { position:fixed; z-index:120; right:calc(8px + var(--sar)); top:calc(6px + var(--sat));
+      padding:4px 10px; border-radius:999px; font-size:11px; font-weight:600; pointer-events:none;
+      background:rgba(0,0,0,.45); border:1px solid rgba(255,255,255,.15); backdrop-filter:blur(3px); }
+    .conn-banner.online { opacity:0; transition:opacity .4s ease .8s; }  /* sparisce quando è tutto ok */
+    .conn-banner.lost { background:rgba(192,57,43,.85); border-color:#e07; }
+
     @media (max-width:780px) {
       .ck-card { width:44px; height:64px; } .ck-card .pip { font-size:20px; }
       .home-title { font-size:48px; }
+      /* barra in alto compatta: su iPhone lo spazio verticale è tutto per il tavolo */
+      .ck-topbar { padding:calc(6px + var(--sat)) 10px 6px; gap:4px 10px; }
+      .ck-brand { font-size:17px; }
+      .ck-status { gap:10px; font-size:12px; }
+      .ck-status b { font-size:10px; }
+      .ck-exit { padding:5px 10px; font-size:12px; }
+      .menu-toggle { width:30px; height:30px; font-size:16px; margin-right:6px; }
+      .ck-progress { padding:3px; font-size:10px; }
+      .game .ck-table { margin:6px 6px 0; }
+      .seat { font-size:12px; }
+      .seat-meta { gap:7px; font-size:11px; }
+      .seat.top { top:8px; } .seat.bottom { bottom:6px; }
+      .seat.left { left:6px; } .seat.right { right:6px; }
+      .mini-back { width:11px; height:16px; }
+      .played-card .pc-name { font-size:10px; }
+      .hand-label { font-size:10px; margin-bottom:4px; }
+      .your-turn { bottom:8px; padding:6px 16px; font-size:14px; }
+      .tp-suit { width:70px; padding:10px 0; }
+      .tp-suit span { font-size:24px; }
+    }
+    /* schermi bassi (iPhone in orizzontale o SE): comprimi ancora */
+    @media (max-height:560px) {
+      .ck-progress { display:none; }
+      .hand-label { display:none; }
     }
     `}</style>
   );

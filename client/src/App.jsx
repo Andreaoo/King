@@ -958,7 +958,7 @@ function Style() {
       border:1px solid #4a1018; }
     .ck-card:not(.disabled):hover { transform:translateY(-10px); box-shadow:0 10px 20px rgba(0,0,0,.4); }
     .ck-card.disabled { cursor:default; }
-    .ck-card.dim { opacity:.4; filter:grayscale(.4); }
+    .ck-card.dim { filter:grayscale(.4); }
     .ck-card.danger { outline:2px solid var(--danger); outline-offset:-2px; }
     .ck-card.danger::before { content:'!'; position:absolute; top:-8px; right:-6px; width:16px; height:16px;
       background:var(--danger); color:#fff; border-radius:50%; font-size:11px; display:flex; align-items:center; justify-content:center; }
@@ -967,7 +967,38 @@ function Style() {
     .ck-hand { margin-top:12px; text-align:center; }
     .hand-label { font-size:11px; letter-spacing:.2em; color:var(--gold); margin-bottom:8px; }
     .hand-label em { color:#bcd; font-style:normal; text-transform:none; letter-spacing:0; }
-    .hand-cards { display:flex; gap:6px; justify-content:center; flex-wrap:wrap; }
+    .hand-cards {
+      position: relative;
+      height: 140px;
+      display: flex;
+      align-items: flex-end;
+      justify-content: center;
+      perspective: 1000px;
+    }
+    .hand-cards .ck-card {
+      position: absolute;
+      bottom: 0;
+      transform-origin: bottom center;
+      transition: transform .2s, box-shadow .2s;
+    }
+    .hand-cards .ck-card:nth-child(1) { transform: translateX(-180px) rotateZ(25deg); }
+    .hand-cards .ck-card:nth-child(2) { transform: translateX(-140px) rotateZ(18deg); }
+    .hand-cards .ck-card:nth-child(3) { transform: translateX(-100px) rotateZ(12deg); }
+    .hand-cards .ck-card:nth-child(4) { transform: translateX(-60px) rotateZ(6deg); }
+    .hand-cards .ck-card:nth-child(5) { transform: translateX(-20px) rotateZ(0deg); }
+    .hand-cards .ck-card:nth-child(6) { transform: translateX(20px) rotateZ(-6deg); }
+    .hand-cards .ck-card:nth-child(7) { transform: translateX(60px) rotateZ(-12deg); }
+    .hand-cards .ck-card:nth-child(8) { transform: translateX(100px) rotateZ(-18deg); }
+    .hand-cards .ck-card:nth-child(9) { transform: translateX(140px) rotateZ(-25deg); }
+    .hand-cards .ck-card:nth-child(10) { transform: translateX(180px) rotateZ(-32deg); }
+    .hand-cards .ck-card:nth-child(11) { transform: translateX(220px) rotateZ(-38deg); }
+    .hand-cards .ck-card:nth-child(12) { transform: translateX(260px) rotateZ(-44deg); }
+    .hand-cards .ck-card:nth-child(13) { transform: translateX(300px) rotateZ(-50deg); }
+    .hand-cards .ck-card:not(.disabled):hover {
+      transform: translateY(-20px) !important;
+      z-index: 100;
+    }
+    .hand-cards .pass-btn { position: absolute; bottom: 0; }
     .pass-btn { background:var(--gold); color:#2a1f06; border:none; border-radius:10px; padding:0 20px; font-weight:700; }
 
     /* TRUMP PICKER */

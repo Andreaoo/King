@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CART KING — Locale</title>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@600;700&family=Outfit:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+* { box-sizing:border-box; }
+body {
+  --felt:#0f5132; --felt2:#0a3d26; --gold:#d9b25f; --gold2:#b8923f;
+  --ink:#17140f; --paper:#f6f1e6; --danger:#c0392b;
+  margin:0; min-height:100vh; font-family:'Outfit',system-ui,sans-serif;
+  background:radial-gradient(120% 120% at 50% 0%, #14663f 0%, var(--felt) 45%, var(--felt2) 100%);
+  color:var(--paper); display:flex; flex-direction:column;
+}
+.topbar { display:flex; justify-content:space-between; align-items:center; gap:12px;
+  padding:10px 16px; background:rgba(0,0,0,.25); border-bottom:1px solid rgba(217,178,95,.25); flex-wrap:wrap; }
+.brand { font-family:'Cormorant Garamond',serif; font-size:20px; color:var(--gold); letter-spacing:.08em; }
+.status { display:flex; gap:16px; font-size:13px; flex-wrap:wrap; }
+.status b { color:var(--gold); font-size:11px; letter-spacing:.06em; margin-right:4px; }
+
+.table { position:relative; flex:1; margin:12px; border-radius:20px; min-height:300px;
+  background:radial-gradient(80% 80% at 50% 45%, #157a49 0%, #0e5a34 70%, #0a3d26 100%);
+  border:2px solid rgba(217,178,95,.4); box-shadow:inset 0 0 60px rgba(0,0,0,.4); }
+.seat { position:absolute; text-align:center; font-size:13px; }
+.seat.top { top:14px; left:50%; transform:translateX(-50%); }
+.seat.left { left:16px; top:50%; transform:translateY(-50%); }
+.seat.right { right:16px; top:50%; transform:translateY(-50%); }
+.seat-name { font-weight:600; }
+.seat.active .seat-name { color:var(--gold); text-shadow:0 0 12px rgba(217,178,95,.6); }
+.seat.won .seat-name { color:#7CFC9A; text-shadow:0 0 16px rgba(124,252,154,.9); }
+.seat-meta { font-size:11px; color:#cde; }
+.mini { display:inline-block; width:13px; height:19px; margin-left:-4px; border-radius:2px; vertical-align:middle;
+  background:repeating-linear-gradient(45deg,#7a1f2b,#7a1f2b 3px,#5c1520 3px,#5c1520 6px); border:1px solid rgba(0,0,0,.3); }
+
+.center { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; }
+.played { position:relative; width:300px; height:220px; }
+.played .pc { position:absolute; }
+.played .pc.p0 { bottom:0; left:50%; transform:translateX(-50%); }
+.played .pc.p1 { left:0; top:50%; transform:translateY(-50%); }
+.played .pc.p2 { top:0; left:50%; transform:translateX(-50%); }
+.played .pc.p3 { right:0; top:50%; transform:translateY(-50%); }
+.pc-name { display:block; text-align:center; font-size:11px; color:#cde; margin-top:3px; }
+.banner { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
+  background:rgba(12,51,32,.9); border:1px solid rgba(124,252,154,.5); border-radius:20px;
+  padding:8px 20px; font-weight:800; white-space:nowrap; z-index:40; }
+
+/* ---- CARTE ---- */
+.card { position:relative; width:64px; height:92px; border-radius:8px; background:var(--paper);
+  border:1px solid #cbb; box-shadow:0 3px 8px rgba(0,0,0,.3); color:var(--ink);
+  display:flex; align-items:center; justify-content:center; padding:0; font-family:inherit;
+  transition:transform .18s ease, box-shadow .2s; cursor:pointer; }
+.card.red { color:var(--danger); }
+.card .pip { font-size:30px; }
+.card .corner { position:absolute; font-size:11px; font-weight:700; line-height:1; text-align:center; }
+.card .corner.tl { top:5px; left:5px; }
+.card .corner.br { bottom:5px; right:5px; transform:rotate(180deg); }
+.card.disabled { cursor:default; filter:grayscale(.4); }
+
+/* ---- MANO A VENTAGLIO ---- */
+.hand { padding:0 12px 14px; }
+.hand-label { text-align:center; font-size:11px; letter-spacing:.2em; color:var(--gold); margin-bottom:6px; }
+.fan-hand { display:flex; flex-direction:column; align-items:center; gap:0;
+  --fan-cw:64px; --fan-ch:92px; width:100%; }
+.fan-row { position:relative; width:100%; height:calc(var(--fan-ch) + 14px); }
+.fan-slot { position:absolute; top:0; left:50%; margin-left:calc(var(--fan-cw) / -2);
+  transform-origin:50% 85%; transition:transform .18s ease; }
+/* dimensioni e testo della carta scalano insieme al ventaglio */
+.fan-slot .card { width:var(--fan-cw); height:var(--fan-ch); border-radius:calc(var(--fan-cw)*.11); }
+.fan-slot .card .pip { font-size:calc(var(--fan-cw)*.46); }
+.fan-slot .card .corner { font-size:calc(var(--fan-cw)*.19); }
+.fan-slot .card .corner.tl { top:6%; left:6%; }
+.fan-slot .card .corner.br { bottom:6%; right:6%; }
+.fan-slot .card:not(.disabled):hover { transform:translateY(-18px); box-shadow:0 12px 22px rgba(0,0,0,.45); }
+.fan-slot:has(.card:not(.disabled):hover) { z-index:100 !important; }
+
+.msg { text-align:center; font-size:14px; color:#9fe0a8; font-weight:600; min-height:20px; margin:8px 0; }
+.actions { display:flex; gap:8px; justify-content:center; flex-wrap:wrap; }
+.btn { border:none; border-radius:10px; padding:10px 18px; font:600 13px 'Outfit',sans-serif; cursor:pointer; }
+.btn.primary { background:linear-gradient(180deg,var(--gold),var(--gold2)); color:#2a1f06; }
+.btn.ghost { background:rgba(255,255,255,.08); color:var(--paper); border:1px solid rgba(255,255,255,.2); }
+
+@media (max-width:780px) {
+  .card .pip { font-size:20px; }
+  .card .corner { font-size:9px; }
+  .played { width:230px; height:180px; }
+}
+</style>
+</head>
+<body>
+<div class="topbar">
+  <div class="brand">🃏 CART KING <small style="opacity:.6">· locale</small></div>
+  <div class="status">
+    <span><b>Mano</b> <span id="modeN">1</span>/13 — <span id="modeName">No Cuori</span></span>
+    <span><b>Presa</b> <span id="trickN">1</span>/13</span>
+    <span id="trumpBox"><b>Briscola</b> <span id="trumpS">♥</span></span>
+  </div>
+</div>
+
+<div class="table">
+  <div class="seat top" id="seat2"></div>
+  <div class="seat left" id="seat1"></div>
+  <div class="seat right" id="seat3"></div>
+  <div class="center"><div class="played" id="played"></div></div>
+</div>
+
+<div class="hand">
+  <div class="hand-label">LE TUE CARTE</div>
+  <div class="fan-hand" id="fan"></div>
+  <div class="msg" id="msg">…</div>
+  <div class="actions">
+    <button class="btn primary" onclick="G.newHand()">🔄 Nuova mano</button>
+    <button class="btn ghost" onclick="G.setCount(13)">13 carte</button>
+    <button class="btn ghost" onclick="G.setCount(10)">10 carte</button>
+    <button class="btn ghost" onclick="G.setCount(7)">7 carte</button>
+    <button class="btn ghost" onclick="G.setCount(5)">5 carte</button>
+  </div>
+</div>
+
+<script>
+const SUITS=["hearts","diamonds","clubs","spades"];
+const SYM={hearts:"♥",diamonds:"♦",clubs:"♣",spades:"♠"};
+const NAME={hearts:"Cuori",diamonds:"Quadri",clubs:"Fiori",spades:"Picche"};
+const RED={hearts:1,diamonds:1,clubs:0,spades:0};
+const RANKS=["2","3","4","5","6","7","8","9","10","J","Q","K","A"];
+const VAL=r=>RANKS.indexOf(r);
+const PLAYERS=["Tu","Anna","Bruno","Carla"];
+// ordine della mano: semi alternati per colore ♠ nero, ♦ rosso, ♣ nero, ♥ rosso
+const FAN_ORDER=["spades","diamonds","clubs","hearts"];
+const sortForFan=cs=>[...cs].sort((a,b)=>
+  FAN_ORDER.indexOf(a.suit)-FAN_ORDER.indexOf(b.suit)||VAL(b.rank)-VAL(a.rank));
+
+const G={
+  hand:[], bots:[[],[],[]], table:[], trump:"hearts",
+  turn:0, trick:0, mode:0, tricks:[0,0,0,0], collecting:null, busy:false,
+
+  deck(){ const d=[]; for(const s of SUITS) for(const r of RANKS) d.push({suit:s,rank:r,id:s+r});
+    for(let i=d.length-1;i>0;i--){const j=Math.random()*(i+1)|0;[d[i],d[j]]=[d[j],d[i]];} return d; },
+
+  newHand(n){
+    const d=this.deck(); const k=n||13;
+    this.hand=sortForFan(d.slice(0,k));
+    this.bots=[d.slice(13,26),d.slice(26,39),d.slice(39,52)];
+    this.table=[]; this.turn=0; this.trick=0; this.tricks=[0,0,0,0];
+    this.collecting=null; this.busy=false;
+    this.trump=SUITS[Math.random()*4|0];
+    this.say("Tocca a te — scegli una carta");
+    this.render();
+  },
+  setCount(n){ this.newHand(n); },
+
+  // carte giocabili: devi rispondere al seme di uscita
+  valid(){
+    if(!this.table.length) return this.hand.map(c=>c.id);
+    const lead=this.table[0].card.suit;
+    const same=this.hand.filter(c=>c.suit===lead);
+    return (same.length?same:this.hand).map(c=>c.id);
+  },
+
+  play(card){
+    if(this.busy||this.turn!==0) return;
+    if(!this.valid().includes(card.id)) return;
+    this.hand=this.hand.filter(c=>c.id!==card.id);
+    this.table.push({player:0,card});
+    this.turn=1; this.busy=true; this.render();
+    setTimeout(()=>this.botTurn(),650);
+  },
+
+  botTurn(){
+    if(this.table.length>=4){ return this.resolve(); }
+    const p=this.turn, h=this.bots[p-1];
+    let pool=h;
+    if(this.table.length){ const lead=this.table[0].card.suit; const s=h.filter(c=>c.suit===lead); if(s.length) pool=s; }
+    const card=pool[Math.random()*pool.length|0];
+    this.bots[p-1]=h.filter(c=>c!==card);
+    this.table.push({player:p,card});
+    this.turn=(p+1)%4;
+    this.render();
+    if(this.table.length>=4) setTimeout(()=>this.resolve(),900);
+    else if(this.turn!==0) setTimeout(()=>this.botTurn(),650);
+    else { this.busy=false; this.say("Tocca a te"); this.render(); }
+  },
+
+  resolve(){
+    const lead=this.table[0].card.suit;
+    let win=this.table[0];
+    for(const t of this.table){
+      const c=t.card, w=win.card;
+      const cs=c.suit===this.trump?2:c.suit===lead?1:0;
+      const ws=w.suit===this.trump?2:w.suit===lead?1:0;
+      if(cs>ws||(cs===ws&&cs>0&&VAL(c.rank)>VAL(w.rank))) win=t;
+    }
+    this.tricks[win.player]++; this.collecting=win.player;
+    this.say(`Presa a ${PLAYERS[win.player]}`);
+    this.render();
+    setTimeout(()=>{
+      this.collecting=null; this.table=[]; this.trick++;
+      if(!this.hand.length && !this.bots[0].length){ this.say("Mano finita! Premi «Nuova mano»"); this.render(); return; }
+      this.turn=win.player;
+      this.render();
+      if(this.turn!==0) setTimeout(()=>this.botTurn(),600);
+      else { this.busy=false; this.say("Tocca a te"); this.render(); }
+    },1200);
+  },
+
+  say(t){ document.getElementById("msg").textContent=t; },
+
+  cardHTML(c,cls){
+    const L=c.rank;
+    return `<div class="card ${RED[c.suit]?"red":"black"} ${cls||""}">
+      <span class="corner tl">${L}<br>${SYM[c.suit]}</span>
+      <span class="pip">${SYM[c.suit]}</span>
+      <span class="corner br">${L}<br>${SYM[c.suit]}</span></div>`;
+  },
+
+  render(){
+    document.getElementById("trickN").textContent=Math.min(this.trick+1,13);
+    document.getElementById("trumpS").textContent=SYM[this.trump]+" "+NAME[this.trump];
+    document.getElementById("trumpS").style.color=RED[this.trump]?"#ff9d8a":"";
+
+    // seggi bot
+    [1,2,3].forEach(i=>{
+      const el=document.getElementById("seat"+i);
+      el.className=`seat ${i===1?"left":i===2?"top":"right"} ${this.turn===i?"active":""} ${this.collecting===i?"won":""}`;
+      el.innerHTML=`<div class="seat-name">🤖 ${PLAYERS[i]}</div>
+        <div class="seat-meta">prese ${this.tricks[i]}</div>
+        <div>${'<span class="mini"></span>'.repeat(Math.min(this.bots[i-1].length,8))} <small>${this.bots[i-1].length}</small></div>`;
+    });
+
+    // tavolo
+    document.getElementById("played").innerHTML=this.table.map(t=>
+      `<div class="pc p${t.player}">${this.cardHTML(t.card)}<span class="pc-name">${PLAYERS[t.player]}</span></div>`).join("");
+
+    this.renderFan();
+  },
+
+  // ---- IL VENTAGLIO ----
+  renderFan(){
+    const fan=document.getElementById("fan");
+    const n=this.hand.length;
+    fan.innerHTML="";
+    if(!n) return;
+
+    // oltre 7 carte → due file, come nell'app mobile
+    const rows = n>7 ? [this.hand.slice(0,Math.ceil(n/2)), this.hand.slice(Math.ceil(n/2))] : [this.hand];
+    const maxRow = Math.max(...rows.map(r=>r.length));
+
+    // geometria adattiva: le carte riempiono la larghezza disponibile restando sovrapposte
+    const avail = Math.max(fan.clientWidth || window.innerWidth, 260) - 10;
+    const CW = Math.round(Math.min(96, Math.max(52, avail/4.6)));
+    const CH = Math.round(CW*1.44);
+    const step = Math.min(CW*0.62, (avail-CW)/Math.max(maxRow-1,1));  // <CW ⇒ sovrapposizione
+    const curve = CW*0.022, ang = 4;
+    fan.style.setProperty("--fan-cw",CW+"px");
+    fan.style.setProperty("--fan-ch",CH+"px");
+    const ok=new Set(this.valid());
+    const myTurn=this.turn===0&&!this.busy;
+
+    rows.forEach(row=>{
+      const rowEl=document.createElement("div");
+      rowEl.className="fan-row";
+      const m=row.length, center=(m-1)/2;
+      row.forEach((c,i)=>{
+        const off=i-center;
+        const slot=document.createElement("div");
+        slot.className="fan-slot";
+        slot.style.transform=`translateX(${off*step}px) translateY(${off*off*curve}px) rotate(${off*ang}deg)`;
+        slot.style.zIndex=i;
+        const playable=myTurn&&ok.has(c.id);
+        slot.innerHTML=this.cardHTML(c, playable?"":"disabled");
+        if(playable) slot.onclick=()=>this.play(c);
+        rowEl.appendChild(slot);
+      });
+      fan.appendChild(rowEl);
+    });
+  }
+};
+
+addEventListener("resize",()=>G.renderFan());
+G.newHand();
+</script>
+</body>
+</html>

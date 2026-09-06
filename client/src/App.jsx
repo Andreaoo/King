@@ -18,6 +18,14 @@ const DOMINO_RANKS = ["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q
 const dominoValue = (r) => DOMINO_RANKS.indexOf(r);
 const rv = (r) => RANKS.indexOf(r);
 const LAYOUT = ["bottom", "left", "top", "right"];
+// ordine di visualizzazione della mano: i semi si alternano per colore (nero/rosso)
+const FAN_SUIT_ORDER = ["spades", "diamonds", "clubs", "hearts"];
+const sortForFan = (cards) =>
+  [...cards].sort(
+    (a, b) =>
+      FAN_SUIT_ORDER.indexOf(a.suit) - FAN_SUIT_ORDER.indexOf(b.suit) ||
+      rv(b.rank) - rv(a.rank)
+  );
 
 // id persistente del giocatore (per riconnessione)
 function usePlayerId() {
@@ -440,6 +448,8 @@ function Game({ state: s, pid, guardedAct, onPlay, onTrump, onBlind, onPass, onN
   }, [s]);
 
   const highlight = useMemo(() => makeHighlighter(s.modeKey), [s.modeKey]);
+  // la mano si mostra coi semi alternati per colore: ♠ ♦ ♣ ♥
+  const fanHand = useMemo(() => sortForFan(s.myHand || []), [s.myHand]);
 
   if (s.status === "modeEnd" || s.status === "gameOver") {
     return <EndScreen s={s} isOwner={isOwner} onNext={onNext} onLeave={onLeave} />;
@@ -576,22 +586,22 @@ function Game({ state: s, pid, guardedAct, onPlay, onTrump, onBlind, onPass, onN
 
       <div className="ck-hand">
         <div className="hand-label">LE TUE CARTE{s.modeKey === "domino" && <em> — gioca i 7 e le carte adiacenti</em>}</div>
-        <div className="hand-cards">
-          {s.myHandHidden ? (
-            (s.myHand || []).map((c) => <Card key={c.id} faceDown />)
-          ) : (
-            (s.myHand || []).map((c) => {
-              const playable = myTurn && !s.awaitingTrump && myValid.includes(c.id);
-              return (
-                <Card key={c.id} card={c} highlight={highlight(c)} dim={myTurn && !playable}
-                  onClick={playable ? () => guardedAct(s, () => onPlay(c.id)) : undefined} disabled={!playable} />
-              );
-            })
-          )}
-          {s.modeKey === "domino" && myTurn && myValid.length === 0 && (
+        <FanHand
+          cards={fanHand}
+          renderCard={(c) => {
+            if (s.myHandHidden) return <Card faceDown />;
+            const playable = myTurn && !s.awaitingTrump && myValid.includes(c.id);
+            return (
+              <Card card={c} highlight={highlight(c)} dim={myTurn && !playable}
+                onClick={playable ? () => guardedAct(s, () => onPlay(c.id)) : undefined} disabled={!playable} />
+            );
+          }}
+        />
+        {s.modeKey === "domino" && myTurn && myValid.length === 0 && (
+          <div style={{ textAlign: "center", marginTop: 8 }}>
             <button className="pass-btn" onClick={() => guardedAct(s, onPass)}>PASSA</button>
-          )}
-        </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -657,6 +667,64 @@ function EndScreen({ s, isOwner, onNext, onLeave }) {
           <button className="btn ghost wide" style={{ marginTop: 10 }} onClick={onLeave}>Esci</button>
         </>
       )}
+    </div>
+  );
+}
+
+/* ---------------- MANO A VENTAGLIO ---------------- */
+// Le carte si sovrappongono e seguono un arco: gli estremi ruotano e scendono.
+// Con più di 7 carte la mano si divide su due file, come nell'app mobile.
+// misura la larghezza disponibile per dimensionare il ventaglio
+function useWidth() {
+  const ref = useRef(null);
+  const [w, setW] = useState(0);
+  useEffect(() => {
+    if (!ref.current) return;
+    const ro = new ResizeObserver(([e]) => setW(e.contentRect.width));
+    ro.observe(ref.current);
+    return () => ro.disconnect();
+  }, []);
+  return [ref, w];
+}
+
+function FanHand({ cards, renderCard }) {
+  const [ref, w] = useWidth();
+  const n = cards.length;
+
+  // oltre 7 carte la mano si divide su due file, come nell'app mobile
+  const rows = n > 7
+    ? [cards.slice(0, Math.ceil(n / 2)), cards.slice(Math.ceil(n / 2))]
+    : [cards];
+  const maxRow = Math.max(1, ...rows.map((r) => r.length));
+
+  // geometria adattiva: le carte riempiono la larghezza restando sovrapposte
+  const avail = Math.max(w || (typeof window !== "undefined" ? window.innerWidth : 360), 260) - 10;
+  const CW = Math.round(Math.min(96, Math.max(52, avail / 4.6)));
+  const CH = Math.round(CW * 1.44);
+  const step = Math.min(CW * 0.62, (avail - CW) / Math.max(maxRow - 1, 1)); // < CW ⇒ sovrapposizione
+  const curve = CW * 0.022;
+  const ang = 4; // gradi per carta
+
+  return (
+    <div className="fan-hand" ref={ref} style={{ "--fan-cw": `${CW}px`, "--fan-ch": `${CH}px` }}>
+      {n > 0 && rows.map((row, ri) => {
+        const center = (row.length - 1) / 2;
+        return (
+          <div className="fan-row" key={ri}>
+            {row.map((c, i) => {
+              const off = i - center;        // distanza dal centro della fila
+              const x = off * step;
+              const y = off * off * curve;   // gli estremi scendono ⇒ arco
+              return (
+                <div className="fan-slot" key={c.id ?? i}
+                  style={{ transform: `translateX(${x}px) translateY(${y}px) rotate(${off * ang}deg)`, zIndex: i }}>
+                  {renderCard(c, i)}
+                </div>
+              );
+            })}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -967,39 +1035,23 @@ function Style() {
     .ck-hand { margin-top:12px; text-align:center; }
     .hand-label { font-size:11px; letter-spacing:.2em; color:var(--gold); margin-bottom:8px; }
     .hand-label em { color:#bcd; font-style:normal; text-transform:none; letter-spacing:0; }
-    .hand-cards {
-      position: relative;
-      height: 140px;
-      display: flex;
-      align-items: flex-end;
-      justify-content: center;
-      perspective: 1000px;
-    }
-    .hand-cards .ck-card {
-      position: absolute;
-      bottom: 0;
-      transform-origin: bottom center;
-      transition: transform .2s, box-shadow .2s;
-    }
-    .hand-cards .ck-card:nth-child(1) { transform: translateX(-180px) rotateZ(25deg); }
-    .hand-cards .ck-card:nth-child(2) { transform: translateX(-140px) rotateZ(18deg); }
-    .hand-cards .ck-card:nth-child(3) { transform: translateX(-100px) rotateZ(12deg); }
-    .hand-cards .ck-card:nth-child(4) { transform: translateX(-60px) rotateZ(6deg); }
-    .hand-cards .ck-card:nth-child(5) { transform: translateX(-20px) rotateZ(0deg); }
-    .hand-cards .ck-card:nth-child(6) { transform: translateX(20px) rotateZ(-6deg); }
-    .hand-cards .ck-card:nth-child(7) { transform: translateX(60px) rotateZ(-12deg); }
-    .hand-cards .ck-card:nth-child(8) { transform: translateX(100px) rotateZ(-18deg); }
-    .hand-cards .ck-card:nth-child(9) { transform: translateX(140px) rotateZ(-25deg); }
-    .hand-cards .ck-card:nth-child(10) { transform: translateX(180px) rotateZ(-32deg); }
-    .hand-cards .ck-card:nth-child(11) { transform: translateX(220px) rotateZ(-38deg); }
-    .hand-cards .ck-card:nth-child(12) { transform: translateX(260px) rotateZ(-44deg); }
-    .hand-cards .ck-card:nth-child(13) { transform: translateX(300px) rotateZ(-50deg); }
-    .hand-cards .ck-card:not(.disabled):hover {
-      transform: translateY(-20px) !important;
-      z-index: 100;
-    }
-    .hand-cards .pass-btn { position: absolute; bottom: 0; }
-    .pass-btn { background:var(--gold); color:#2a1f06; border:none; border-radius:10px; padding:0 20px; font-weight:700; }
+    /* mano a ventaglio: carte sovrapposte lungo un arco */
+    .fan-hand { display:flex; flex-direction:column; align-items:center; gap:0; width:100%;
+      --fan-cw:64px; --fan-ch:92px; }
+    .fan-row { position:relative; width:100%; height:calc(var(--fan-ch) + 14px); }
+    .fan-slot { position:absolute; top:0; left:50%; margin-left:calc(var(--fan-cw) / -2);
+      transform-origin:50% 85%; transition:transform .18s ease; }
+    /* dimensioni e testo della carta scalano col ventaglio */
+    .fan-slot .ck-card { width:var(--fan-cw); height:var(--fan-ch); border-radius:calc(var(--fan-cw)*.11); }
+    .fan-slot .ck-card .pip { font-size:calc(var(--fan-cw)*.46); }
+    .fan-slot .ck-card .corner { font-size:calc(var(--fan-cw)*.19); }
+    .fan-slot .ck-card .corner.tl { top:6%; left:6%; }
+    .fan-slot .ck-card .corner.br { bottom:6%; right:6%; }
+    .fan-slot .ck-card { display:block; transition:transform .18s ease, box-shadow .2s; }
+    /* il sollevamento sta sulla carta, così non cancella la posa del ventaglio */
+    .fan-slot .ck-card:not(.disabled):hover { transform:translateY(-18px); box-shadow:0 12px 22px rgba(0,0,0,.45); }
+    .fan-slot:has(.ck-card:not(.disabled):hover) { z-index:100 !important; }
+    .pass-btn { background:var(--gold); color:#2a1f06; border:none; border-radius:10px; padding:10px 20px; font-weight:700; }
 
     /* TRUMP PICKER */
     .trump-picker { text-align:center; margin:10px 0; }

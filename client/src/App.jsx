@@ -53,6 +53,7 @@ export default function App() {
   const [name, setName] = useState(localStorage.getItem("ck_name") || "");
   const [joinCode, setJoinCode] = useState(readRoomFromUrl());
   const [difficulty, setDifficulty] = useState("neutral");
+  const [gameType, setGameType] = useState("teams"); // "teams" | "classic"
   const [error, setError] = useState("");
   const [notice, setNotice] = useState(null); // avviso centrale (giocatore uscito)
   const lastActionKey = useRef(null);
@@ -102,7 +103,7 @@ export default function App() {
 
   function createRoom() {
     localStorage.setItem("ck_name", name);
-    emit("createRoom", { name: name || "Giocatore", difficulty, pid }, (res) => {
+    emit("createRoom", { name: name || "Giocatore", difficulty, gameType, pid }, (res) => {
       if (!res?.ok) setError(res?.error || "Errore");
       else if (res.code) window.history.replaceState(null, "", `/room/${res.code}`);
     });
@@ -134,7 +135,7 @@ export default function App() {
   const connBanner = <ConnBanner status={connStatus} />;
 
   if (connStatus === "connecting" && !state)
-    return <Shell notice={notice} onCloseNotice={() => setNotice(null)}>{connBanner}<div className="ck-center-msg">Connessione al server…<br /><small>{SERVER_URL}</small></div></Shell>;
+    return <Shell notice={notice} onCloseNotice={() => setNotice(null)}>{connBanner}<Connecting /></Shell>;
 
   if (view === "home" || view === "join")
     return (
@@ -143,6 +144,7 @@ export default function App() {
         <Home
           view={view} setView={setView} name={name} setName={setName}
           difficulty={difficulty} setDifficulty={setDifficulty}
+          gameType={gameType} setGameType={setGameType}
           joinCode={joinCode} setJoinCode={setJoinCode}
           onCreate={createRoom} onJoin={joinRoom} error={error}
           urlRoom={urlRoom}
@@ -173,7 +175,20 @@ export default function App() {
           state={state} pid={pid}
           onStart={() => emit("startGame")}
           onConfig={(cfg) => emit("setConfig", cfg)}
+          onSetTeam={(seat, team) => emit("setTeam", { seat, team })}
           onLeave={leaveRoom}
+        />
+      </Shell>
+    );
+
+  if (state.status === "choosing")
+    return (
+      <Shell notice={notice} onCloseNotice={() => setNotice(null)}>
+        {connBanner}
+        <ModeChoice
+          s={state}
+          onPropose={(modes) => emit("proposeModes", { modes })}
+          onDecide={(key, trump) => emit("decideMode", { key, trump })}
         />
       </Shell>
     );
@@ -242,7 +257,12 @@ function ConnBanner({ status }) {
 }
 
 /* ---------------- HOME ---------------- */
-function Home({ view, setView, name, setName, difficulty, setDifficulty, joinCode, setJoinCode, onCreate, onJoin, error, urlRoom }) {
+const GAME_TYPES = [
+  { k: "teams",   t: "👥 Gioco a Coppie",  d: "Due squadre da due. Punteggio della coppia, 4 negative e 3 positive per squadra." },
+  { k: "classic", t: "👤 Partita classica", d: "Ognuno per sé, le 13 mani nell'ordine fisso." },
+];
+
+function Home({ view, setView, name, setName, difficulty, setDifficulty, gameType, setGameType, joinCode, setJoinCode, onCreate, onJoin, error, urlRoom }) {
   const cameFromLink = urlRoom && view === "join";
   return (
     <div className="home">
@@ -260,6 +280,17 @@ function Home({ view, setView, name, setName, difficulty, setDifficulty, joinCod
 
       {view === "home" ? (
         <>
+          <div className="field">Tipo di partita
+            <div className="opt-list">
+              {GAME_TYPES.map((o) => (
+                <button key={o.k} className={`opt ${gameType === o.k ? "sel" : ""}`}
+                  onClick={() => setGameType(o.k)}>
+                  <span className="dot" />
+                  <span><span className="t">{o.t}</span><span className="d">{o.d}</span></span>
+                </button>
+              ))}
+            </div>
+          </div>
           <div className="field">Difficoltà bot (riempiono i posti vuoti)
             <div className="seg">
               {[["easy", "Facile"], ["neutral", "Neutro"], ["hard", "Difficile"]].map(([k, l]) => (
@@ -347,8 +378,83 @@ function InstallHint() {
   );
 }
 
+/* ---------------- SCHERMATA DI CONNESSIONE ---------------- */
+// Se il server non risponde entro qualche secondo compaiono le spiegazioni e,
+// nell'APK, il campo per correggere l'indirizzo: senza questo l'app resterebbe
+// bloccata qui per sempre, senza alcun modo di rimediare.
+function Connecting() {
+  const [slow, setSlow] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setSlow(true), 6000);
+    return () => clearTimeout(t);
+  }, []);
+
+  return (
+    <div className="connecting">
+      <div className="conn-spinner" aria-hidden />
+      <p className="conn-main">Connessione al server…</p>
+      <p className="conn-url">{SERVER_URL.replace(/^https?:\/\//, "")}</p>
+      {slow && (
+        <div className="conn-slow">
+          <p>
+            Ci sta mettendo più del solito. Se il server è ospitato su un piano
+            gratuito potrebbe essersi addormentato: il primo avvio richiede
+            <b> 30-50 secondi</b>.
+          </p>
+          <button className="btn ghost wide" onClick={() => window.location.reload()}>
+            RIPROVA
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ---------------- LOBBY ---------------- */
-function Lobby({ state, pid, onStart, onConfig, onLeave }) {
+// Riquadro delle squadre: ogni posto si sposta con un tocco. La validazione
+// 2 contro 2 blocca l'avvio finché la configurazione non è corretta.
+function TeamsBox({ state, pid, onSetTeam }) {
+  // Le squadre sono assegnate ai POSTI, non ai giocatori: i posti ancora vuoti
+  // verranno riempiti dai bot ma la loro squadra è già decisa e visibile.
+  const seats = [0, 1, 2, 3];
+  const dellaSquadra = (t) => seats.filter((i) => state.teams[i] === t);
+  const nb = dellaSquadra(0).length, nr = dellaSquadra(1).length;
+  const ok = state.teamsValid;
+
+  const col = (t, cls, titolo) => (
+    <div className={`team ${cls}`}>
+      <div className="team-head">
+        <span className="team-name">{titolo}</span>
+        <span className="team-count">{dellaSquadra(t).length}/2</span>
+      </div>
+      {dellaSquadra(t).map((i) => {
+        const p = state.players[i];
+        return (
+          <button key={i} className={`pill-player ${state.youSeat === i ? "me" : ""} ${p ? "" : "vuoto"}`}
+            onClick={() => onSetTeam(i, t === 0 ? 1 : 0)}>
+            <span>{p ? (p.bot ? "🤖" : "👤") : "➕"}</span>
+            <span>{p ? p.name : `posto ${i + 1}`}</span>
+            <span className="tag">{state.youSeat === i ? "TU" : p ? "" : "→ bot"}</span>
+          </button>
+        );
+      })}
+      {dellaSquadra(t).length === 0 && <div className="slot-empty">nessun posto</div>}
+    </div>
+  );
+
+  return (
+    <>
+      <div className="teams">{col(0, "blu", "🔵 SQUADRA BLU")}{col(1, "rossa", "🔴 SQUADRA ROSSA")}</div>
+      <div className={`valid-note ${ok ? "ok" : "bad"}`}>
+        {ok ? "✓ Squadre valide — 2 contro 2" : `✗ Servono 2 contro 2 (ora ${nb} blu / ${nr} rossi)`}
+      </div>
+      <p className="lobby-hint">Tocca un posto per spostarlo nell\'altra squadra.
+        I posti liberi diventano bot all\'avvio.</p>
+    </>
+  );
+}
+
+function Lobby({ state, pid, onStart, onConfig, onSetTeam, onLeave }) {
   const isOwner = state.ownerId === pid;
   const humans = state.players.filter((p) => !p.bot).length;
   const [copied, setCopied] = useState(false);
@@ -413,20 +519,25 @@ function Lobby({ state, pid, onStart, onConfig, onLeave }) {
         </button>
       )}
 
-      <div className="seats">
-        {state.players.map((p, i) => (
-          <div className="seat-row" key={i}>
-            <span>{p.bot ? "🤖" : "👤"} {p.name}{!p.connected && " (offline)"}</span>
-            <em>{p.bot ? p.diffLabel : i === 0 ? "proprietario" : "in attesa"}</em>
-          </div>
-        ))}
-        {Array.from({ length: 4 - state.players.length }).map((_, i) => (
-          <div className="seat-row empty" key={"e" + i}><span>posto libero</span><em>→ bot</em></div>
-        ))}
-      </div>
+      {state.gameType === "teams" ? (
+        <TeamsBox state={state} pid={pid} onSetTeam={onSetTeam} />
+      ) : (
+        <div className="seats">
+          {state.players.map((p, i) => (
+            <div className="seat-row" key={i}>
+              <span>{p.bot ? "🤖" : "👤"} {p.name}{!p.connected && " (offline)"}</span>
+              <em>{p.bot ? p.diffLabel : i === 0 ? "proprietario" : "in attesa"}</em>
+            </div>
+          ))}
+          {Array.from({ length: 4 - state.players.length }).map((_, i) => (
+            <div className="seat-row empty" key={"e" + i}><span>posto libero</span><em>→ bot</em></div>
+          ))}
+        </div>
+      )}
       <p className="lobby-hint">{humans}/4 umani · i posti restanti diventano bot</p>
       {isOwner ? (
-        <button className="btn primary wide" onClick={onStart}>AVVIA PARTITA</button>
+        <button className="btn primary wide" onClick={onStart}
+          disabled={state.gameType === "teams" && !state.teamsValid}>AVVIA PARTITA</button>
       ) : (
         <div className="waiting">In attesa che il proprietario avvii la partita…</div>
       )}
@@ -458,6 +569,155 @@ function Lobby({ state, pid, onStart, onConfig, onLeave }) {
             </div>
           </div>
         </div>
+      )}
+    </div>
+  );
+}
+
+const MODE_DESC = {
+  noKingsJacks: "ogni Re o Fante preso vale −2", noQueens: "ogni Donna presa vale −3",
+  no8Diamonds: "chi prende l'8♦ fa −8", noKingHearts: "chi prende il K♥ fa −8",
+  noHearts: "ogni cuori preso vale −1", lastTwoTricks: "le ultime due prese valgono −4",
+  noTricks: "ogni presa vale −1", domino: "scarta tutte le carte partendo dai 7",
+  chosenTrump: "ogni presa vale +1, con briscola a scelta", hiddenTrump: "ogni presa vale +2, senza briscola",
+};
+const POSITIVE_MODES = ["chosenTrump", "hiddenTrump"];
+const ALL_MODES = ["noKingsJacks","noQueens","no8Diamonds","noKingHearts","noHearts",
+  "lastTwoTricks","noTricks","domino","chosenTrump","hiddenTrump"];
+
+/* ---------------- CONTRATTAZIONE FRA COMPAGNI ----------------
+   Chi propone manda due modalità al COMPAGNO di squadra, che ne accetta una
+   oppure ne sceglie una terza. Il seme di «Seme scelto» si dichiara subito,
+   insieme alla proposta.                                                     */
+function ModeChoice({ s, onPropose, onDecide }) {
+  const [sel, setSel] = useState([]);        // [{key, trump}]
+  const [altKey, setAltKey] = useState(null); // terza scelta in attesa del seme
+  const io = s.youSeat;
+  const disp = s.availableToMe || [];
+
+  const piano = (
+    <div className="plan">
+      {[0, 1].map((t) => (
+        <div className={`q ${t === 0 ? "blu" : "rossa"}`} key={t}>
+          <div className="qt">{t === 0 ? "🔵 BLU" : "🔴 ROSSA"}</div>
+          <div className="qq"><span>negative</span><b>{s.negativeLeft[t]}<i>/4</i></b></div>
+          <div className="qq"><span>positive</span><b>{s.positiveLeft[t]}<i>/3</i></b></div>
+        </div>
+      ))}
+    </div>
+  );
+
+  const cella = (k, onClick, extra = "") => {
+    const pos = POSITIVE_MODES.includes(k);
+    const gia = !pos && (s.usedNegatives || []).includes(k);
+    const off = !disp.includes(k);
+    return (
+      <button key={k} className={`mode-btn ${off ? "used" : ""} ${extra}`} disabled={off} onClick={onClick}>
+        {MODE_TITLES[k]}
+        {pos && <span className="flag pos">POSITIVA</span>}
+        {gia && <span className="flag gia">GIÀ GIOCATA</span>}
+        <small>{MODE_DESC[k]}</small>
+      </button>
+    );
+  };
+
+  // ---- fase PROPOSTA ----
+  if (s.phase === "propose") {
+    if (s.proposer !== io)
+      return (
+        <div className="mode-pane">
+          <h2 className="mc-title">Proposta</h2>
+          <p className="mc-sub"><b>{s.players[s.proposer].name}</b> sceglie due modalità
+            da mandare al compagno <b>{s.players[s.decider].name}</b>…</p>
+          {piano}<div className="waiting">In attesa…</div>
+        </div>
+      );
+    const seme = sel.find((x) => x.key === "chosenTrump");
+    const pronto = sel.length === Math.min(2, disp.length) && (!seme || seme.trump);
+    const toggle = (k) => setSel((prev) => {
+      const i = prev.findIndex((x) => x.key === k);
+      if (i >= 0) return prev.filter((x) => x.key !== k);
+      if (prev.length >= 2) return prev;
+      return [...prev, { key: k, trump: null }];
+    });
+    return (
+      <div className="mode-pane">
+        <h2 className="mc-title">Proponi due modalità</h2>
+        <p className="mc-sub">Scegline due e mandale al tuo compagno <b>{s.players[s.decider].name}</b>:
+          ne prenderà una, oppure ne sceglierà una terza.</p>
+        {piano}
+        <div className="side-title">Selezionate: {sel.length}/2</div>
+        <div className="mode-grid">
+          {ALL_MODES.map((k) => cella(k, () => toggle(k), sel.some((x) => x.key === k) ? "sel" : ""))}
+        </div>
+        {seme && (
+          <>
+            <div className="side-title" style={{ marginTop: 14 }}>Seme per «Seme scelto» — va dichiarato ora</div>
+            <div className="mode-grid">
+              {SUITS.map((su) => (
+                <button key={su} className={`mode-btn suit ${seme.trump === su ? "sel" : ""} ${SUIT_RED[su] ? "red" : ""}`}
+                  onClick={() => setSel((prev) => prev.map((x) => x.key === "chosenTrump" ? { ...x, trump: su } : x))}>
+                  {SUIT_SYMBOL[su]} {SUIT_NAME[su]}
+                </button>
+              ))}
+            </div>
+          </>
+        )}
+        <button className="btn primary wide" disabled={!pronto} onClick={() => onPropose(sel)}>
+          MANDA AL COMPAGNO →
+        </button>
+      </div>
+    );
+  }
+
+  // ---- fase DECISIONE ----
+  const prop = s.proposals || [];
+  const propBox = (
+    <>
+      <div className="side-title">Proposte dal compagno {s.players[s.proposer].name}</div>
+      <div className="proposals">
+        {prop.map((x, i) => (
+          <button key={i} className="prop" onClick={() => onDecide(x.key, x.trump)}>
+            <span className="n">{i + 1}</span>
+            {MODE_TITLES[x.key]}
+            {x.trump && <b className={SUIT_RED[x.trump] ? "red" : ""}> {SUIT_SYMBOL[x.trump]}</b>}
+            {POSITIVE_MODES.includes(x.key) && <span className="flag pos" style={{ marginLeft: "auto" }}>POSITIVA</span>}
+          </button>
+        ))}
+      </div>
+    </>
+  );
+  if (s.decider !== io)
+    return (
+      <div className="mode-pane">
+        <h2 className="mc-title">Decisione</h2>
+        <p className="mc-sub"><b>{s.players[s.decider].name}</b> sta decidendo…</p>
+        {piano}{propBox}<div className="waiting">In attesa…</div>
+      </div>
+    );
+  const alt = disp.filter((k) => !prop.some((x) => x.key === k));
+  return (
+    <div className="mode-pane">
+      <h2 className="mc-title">Tocca a te</h2>
+      <p className="mc-sub">Il tuo compagno propone queste due. Accettane una, oppure scegline una terza.</p>
+      {piano}{propBox}
+      <div className="side-title">…oppure scegline una terza</div>
+      <div className="mode-grid">
+        {alt.map((k) => cella(k, () => (k === "chosenTrump" ? setAltKey(k) : onDecide(k, null)),
+          altKey === k ? "sel" : ""))}
+      </div>
+      {altKey === "chosenTrump" && (
+        <>
+          <div className="side-title" style={{ marginTop: 14 }}>Dichiara il seme</div>
+          <div className="mode-grid">
+            {SUITS.map((su) => (
+              <button key={su} className={`mode-btn suit ${SUIT_RED[su] ? "red" : ""}`}
+                onClick={() => onDecide("chosenTrump", su)}>
+                {SUIT_SYMBOL[su]} {SUIT_NAME[su]}
+              </button>
+            ))}
+          </div>
+        </>
       )}
     </div>
   );
@@ -505,6 +765,17 @@ function Game({ state: s, pid, guardedAct, onPlay, onTrump, onBlind, onPass, onN
   }, [s]);
 
   const highlight = useMemo(() => makeHighlighter(s.modeKey), [s.modeKey]);
+
+  // Raccolta della presa in due tempi. Il server tiene le carte in tavola per
+  // 900ms dopo aver annunciato il vincitore: 440ms per radunarle al centro,
+  // poi 440ms di volo verso chi ha vinto. Totale 880ms, dentro il tempo.
+  const [phase, setPhase] = useState(null); // null | "gather" | "fly"
+  useEffect(() => {
+    if (s.collecting == null) { setPhase(null); return; }
+    setPhase("gather");
+    const t = setTimeout(() => setPhase("fly"), 440);
+    return () => clearTimeout(t);
+  }, [s.collecting, s.trickNumber]);
   // la mano si mostra coi semi alternati per colore: ♠ ♦ ♣ ♥
   const fanHand = useMemo(() => sortForFan(s.myHand || []), [s.myHand]);
 
@@ -572,20 +843,32 @@ function Game({ state: s, pid, guardedAct, onPlay, onTrump, onBlind, onPass, onN
         ))}
       </div>
 
+      {s.gameType === "teams" && (
+        <div className="teambar">
+          <div className="tscore blu">🔵 BLU <span className="v">{s.teamScores[0] + s.teamHandScores[0]}</span></div>
+          <div className="tscore rossa">🔴 ROSSA <span className="v">{s.teamScores[1] + s.teamHandScores[1]}</span></div>
+        </div>
+      )}
+
       <div className="ck-table">
         {s.players.map((p, i) => (
-          <div key={i} className={`seat ${seatOf(i)} ${s.turn === i ? "active" : ""} ${s.collecting === i ? "won" : ""}`}>
-            <div className="seat-name">{p.bot ? "🤖" : "👤"} {p.name}{i === seat ? " (tu)" : ""}{!p.connected && " 🔌"}</div>
-            <div className="seat-meta">
-              {s.isTrickMode && <span>Prese: {s.tricksWon[i]}</span>}
-              <span className={s.handScores[i] < 0 ? "neg" : s.handScores[i] > 0 ? "pos" : ""}>{s.handScores[i]}</span>
+          <div key={i} className={`seat ${seatOf(i)} ${s.gameType === "teams" ? (s.teams[i] === 0 ? "tblu" : "trossa") : ""} ${s.turn === i ? "active" : ""} ${s.collecting === i ? "won" : ""}`}>
+            <span className="seat-name">{p.bot ? "🤖" : "👤"} {p.name}{i === seat ? " (tu)" : ""}{!p.connected && " 🔌"}</span>
+            <span className="seat-meta">
+              {s.isTrickMode && <span>{s.tricksWon[i]} prese</span>}
+              {/* il punteggio di mano compare solo quando c'è: evita uno "0" nudo accanto al totale */}
+              {s.handScores[i] !== 0 && (
+                <span className={s.handScores[i] < 0 ? "neg" : "pos"}>
+                  {s.handScores[i] > 0 ? "+" : ""}{s.handScores[i]}
+                </span>
+              )}
               <span className="tot">tot {s.totalScores[i]}</span>
-            </div>
+            </span>
             {i !== seat && (
-              <div className="seat-cards">
-                {Array.from({ length: Math.min(p.handCount, 8) }).map((_, k) => <div key={k} className="mini-back" />)}
+              <span className="seat-cards">
+                {Array.from({ length: Math.min(p.handCount, 5) }).map((_, k) => <span key={k} className="mini-back" />)}
                 <span className="count">{p.handCount}</span>
-              </div>
+              </span>
             )}
           </div>
         ))}
@@ -594,12 +877,12 @@ function Game({ state: s, pid, guardedAct, onPlay, onTrump, onBlind, onPass, onN
           {s.modeKey === "domino" ? (
             <DominoBoard board={s.dominoBoard} />
           ) : (
-            <div className={`played ${s.collecting != null ? "collecting phase-fly" : ""}`}>
+            <div className={`played ${s.collecting != null ? `collecting phase-${phase || "gather"}` : ""}`}>
               {s.table.length === 0 && s.collecting == null && <div className="ck-msg">{s.message}</div>}
               {s.table.map((t, i) => (
                 <div key={i}
                   className={`played-card seat-${seatOf(t.player)} ${s.collecting != null ? `fly-to-${seatOf(s.collecting)}` : ""} ${s.collecting === t.player ? "winner-card" : ""}`}>
-                  <Card card={t.card} small highlight={highlight(t.card)} />
+                  <Card card={t.card} highlight={highlight(t.card)} />
                   <span className="pc-name">{s.players[t.player].name}</span>
                 </div>
               ))}
@@ -678,6 +961,58 @@ function makeHighlighter(modeKey) {
 /* ---------------- END SCREEN ---------------- */
 function EndScreen({ s, isOwner, onNext, onLeave }) {
   const isOver = s.status === "gameOver";
+
+  // ---- gioco a coppie: conta la squadra, i singoli sono di contorno ----
+  if (s.gameType === "teams") {
+    const bm = s.teamHandScores[0], rm = s.teamHandScores[1];
+    const bt = s.teamScores[0], rt = s.teamScores[1];
+    const membri = (t) => s.players.map((p, i) => ({ p, i })).filter((x) => s.teams[x.i] === t);
+    const vinc = (a, b) => a === b ? "Pareggio" : (a > b ? "🔵 Vince la squadra BLU" : "🔴 Vince la squadra ROSSA");
+    const card = (t, cls, lab, val, dettaglio) => (
+      <div className={`rt ${cls}`}>
+        <div className="lab">{lab}</div>
+        <div className="big">{val > 0 ? "+" : ""}{val}</div>
+        {dettaglio && <div className="who">{dettaglio}</div>}
+      </div>
+    );
+    return (
+      <div className="endscreen">
+        {isOver ? <div className="trophy">🏆</div> : <div className="me-tag">{s.modeShort}</div>}
+        <h2>{isOver ? "Partita finita" : "Fine mano"}</h2>
+        <div className="crown">{vinc(isOver ? bt : bm, isOver ? rt : rm)}</div>
+        <div className="result-teams">
+          {card(0, "blu", "🔵 BLU", isOver ? bt : bm,
+            !isOver && membri(0).map((x) => `${x.p.name} ${s.handScores[x.i] > 0 ? "+" : ""}${s.handScores[x.i]}`).join(" · "))}
+          {card(1, "rossa", "🔴 ROSSA", isOver ? rt : rm,
+            !isOver && membri(1).map((x) => `${x.p.name} ${s.handScores[x.i] > 0 ? "+" : ""}${s.handScores[x.i]}`).join(" · "))}
+        </div>
+        {!isOver && (
+          <>
+            <div className="side-title">Totale partita</div>
+            <div className="result-teams">
+              {card(0, "blu", "🔵 BLU", bt)}{card(1, "rossa", "🔴 ROSSA", rt)}
+            </div>
+            <div className="plan">
+              {[0, 1].map((t) => (
+                <div className={`q ${t === 0 ? "blu" : "rossa"}`} key={t}>
+                  <div className="qt">{t === 0 ? "🔵 BLU" : "🔴 ROSSA"}</div>
+                  <div className="qq"><span>negative</span><b>{s.negativeLeft[t]}<i>/4</i></b></div>
+                  <div className="qq"><span>positive</span><b>{s.positiveLeft[t]}<i>/3</i></b></div>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+        {isOver ? (
+          <button className="btn primary wide" onClick={onLeave}>TORNA AL MENU</button>
+        ) : isOwner ? (
+          <button className="btn primary wide" onClick={onNext}>MANO SUCCESSIVA →</button>
+        ) : <div className="waiting">In attesa del proprietario…</div>}
+        {!isOver && <button className="btn ghost wide" style={{ marginTop: 10 }} onClick={onLeave}>Esci</button>}
+      </div>
+    );
+  }
+
   const ranked = s.players.map((p, i) => ({ ...p, score: s.totalScores[i] })).sort((a, b) => b.score - a.score);
   const medals = ["🥇", "🥈", "🥉", "  "];
   return (
@@ -731,21 +1066,27 @@ function EndScreen({ s, isOwner, onNext, onLeave }) {
 /* ---------------- MANO A VENTAGLIO ---------------- */
 // Le carte si sovrappongono e seguono un arco: gli estremi ruotano e scendono.
 // Con più di 7 carte la mano si divide su due file, come nell'app mobile.
-// misura la larghezza disponibile per dimensionare il ventaglio
-function useWidth() {
+// misura larghezza disponibile e altezza della finestra: il ventaglio si
+// dimensiona su entrambe, altrimenti su schermi bassi sborda sotto il bordo
+function useBox() {
   const ref = useRef(null);
   const [w, setW] = useState(0);
+  const [vh, setVh] = useState(() => (typeof window !== "undefined" ? window.innerHeight : 800));
   useEffect(() => {
-    if (!ref.current) return;
-    const ro = new ResizeObserver(([e]) => setW(e.contentRect.width));
-    ro.observe(ref.current);
-    return () => ro.disconnect();
+    const onResize = () => setVh(window.innerHeight);
+    window.addEventListener("resize", onResize);
+    let ro;
+    if (ref.current) {
+      ro = new ResizeObserver(([e]) => setW(e.contentRect.width));
+      ro.observe(ref.current);
+    }
+    return () => { window.removeEventListener("resize", onResize); ro?.disconnect(); };
   }, []);
-  return [ref, w];
+  return [ref, w, vh];
 }
 
 function FanHand({ cards, renderCard }) {
-  const [ref, w] = useWidth();
+  const [ref, w, vh] = useBox();
   const n = cards.length;
 
   // oltre 7 carte la mano si divide su due file, come nell'app mobile
@@ -754,9 +1095,13 @@ function FanHand({ cards, renderCard }) {
     : [cards];
   const maxRow = Math.max(1, ...rows.map((r) => r.length));
 
-  // geometria adattiva: le carte riempiono la larghezza restando sovrapposte
+  // geometria adattiva: le carte riempiono la larghezza restando sovrapposte,
+  // ma senza mai superare l'altezza concessa alla mano (ROW_PAD = spazio per l'arco)
+  const ROW_PAD = 20;
   const avail = Math.max(w || (typeof window !== "undefined" ? window.innerWidth : 360), 260) - 10;
-  const CW = Math.round(Math.min(96, Math.max(52, avail / 4.6)));
+  const budget = Math.min(vh * 0.36, 330);                    // altezza massima del ventaglio
+  const maxCH = Math.max(58, budget / rows.length - ROW_PAD); // altezza carta consentita
+  const CW = Math.round(Math.min(96, maxCH / 1.44, Math.max(52, avail / 4.6)));
   const CH = Math.round(CW * 1.44);
   const step = Math.min(CW * 0.62, (avail - CW) / Math.max(maxRow - 1, 1)); // < CW ⇒ sovrapposizione
   const curve = CW * 0.022;
@@ -904,6 +1249,18 @@ function Style() {
     .home-facts span { font-size:12px; color:#bcd; letter-spacing:.05em; }
     .home-note { font-size:12px; color:#a9c4b3; line-height:1.5; }
 
+    /* schermata di connessione */
+    .connecting { text-align:center; padding:40px 22px; max-width:420px; margin:0 auto; }
+    .conn-spinner { width:38px; height:38px; margin:0 auto 18px; border-radius:50%;
+      border:3px solid rgba(217,178,95,.25); border-top-color:var(--gold); animation:spin 1s linear infinite; }
+    @keyframes spin { to { transform:rotate(360deg); } }
+    .conn-main { font-size:16px; margin:0 0 4px; }
+    .conn-url { font-size:12px; color:var(--muted); margin:0; word-break:break-all; }
+    .conn-slow { margin-top:24px; padding-top:20px; border-top:1px solid rgba(255,255,255,.12); }
+    .conn-slow p { font-size:13px; line-height:1.55; color:#cde; }
+    .conn-slow b { color:var(--gold); }
+    .conn-slow .btn { margin-top:8px; }
+
     /* avviso "aggiungi alla home" */
     .install-hint { position:relative; margin:18px 0; padding:14px 16px; text-align:left;
       background:rgba(217,178,95,.12); border:1px solid rgba(217,178,95,.4); border-radius:14px; }
@@ -913,6 +1270,101 @@ function Style() {
     .ih-close { position:absolute; top:8px; right:8px; width:26px; height:26px; border-radius:7px;
       background:rgba(255,255,255,.1); border:none; color:#cde; font-size:13px; cursor:pointer; }
     .install-hint .btn { margin-top:10px; width:100%; padding:11px; font-size:14px; }
+
+    /* ---------- GIOCO A COPPIE ---------- */
+    .opt-list { display:flex; flex-direction:column; gap:9px; margin-top:8px; }
+    .opt { display:flex; align-items:flex-start; gap:11px; padding:13px 14px; border-radius:14px;
+      background:rgba(255,255,255,.05); border:2px solid rgba(255,255,255,.12); cursor:pointer;
+      text-align:left; width:100%; color:var(--paper); font-family:inherit; text-transform:none;
+      letter-spacing:0; transition:background .15s, border-color .15s; }
+    .opt.sel { background:rgba(217,178,95,.16); border-color:var(--gold); }
+    .opt .dot { width:18px; height:18px; border-radius:50%; flex:none; margin-top:2px;
+      border:2px solid rgba(255,255,255,.35); }
+    .opt.sel .dot { border-color:var(--gold); background:radial-gradient(circle,var(--gold) 45%,transparent 46%); }
+    .opt .t { display:block; font-weight:700; font-size:14px; }
+    .opt .d { display:block; font-size:11.5px; color:var(--muted); line-height:1.45; margin-top:2px; }
+
+    .teams { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin:8px 0 0; }
+    .team { border-radius:16px; padding:12px 10px; border:2px solid transparent; }
+    .team.blu   { background:rgba(74,144,226,.14); border-color:rgba(74,144,226,.5); }
+    .team.rossa { background:rgba(224,90,90,.14);  border-color:rgba(224,90,90,.5); }
+    .team-head { display:flex; align-items:center; justify-content:space-between; margin-bottom:9px; }
+    .team-name { font-weight:800; font-size:12px; letter-spacing:.06em; }
+    .team.blu .team-name { color:#9cc4f5; } .team.rossa .team-name { color:#f2a3a3; }
+    .team-count { font-size:11px; color:#cde; opacity:.8; }
+    .pill-player { display:flex; align-items:center; gap:7px; width:100%; text-align:left;
+      padding:9px 10px; margin-bottom:6px; border-radius:11px; font:600 13px 'Outfit',sans-serif;
+      background:rgba(255,255,255,.07); border:1px solid rgba(255,255,255,.12); color:var(--paper); }
+    .pill-player.me { border-color:var(--gold); background:rgba(217,178,95,.16); }
+    .pill-player .tag { margin-left:auto; font-size:10px; color:var(--muted); font-weight:700; }
+    .pill-player.vuoto { opacity:.6; border-style:dashed; }
+    .slot-empty { padding:9px 10px; margin-bottom:6px; border-radius:11px; font-size:12px;
+      border:1px dashed rgba(255,255,255,.2); color:var(--muted); text-align:center; }
+    .valid-note { margin-top:12px; padding:10px 12px; border-radius:11px; font-size:13px;
+      font-weight:600; text-align:center; }
+    .valid-note.ok  { background:rgba(124,252,154,.14); border:1px solid rgba(124,252,154,.45); color:#9fe0a8; }
+    .valid-note.bad { background:rgba(224,90,90,.14);  border:1px solid rgba(224,90,90,.5);  color:#f2a3a3; }
+
+    /* fascia del punteggio di squadra: è il risultato ufficiale */
+    .teambar { flex:none; display:flex; gap:8px; justify-content:center; padding:6px 8px 0; }
+    .tscore { flex:1; max-width:190px; display:flex; align-items:center; justify-content:center; gap:8px;
+      padding:7px 12px; border-radius:12px; font-size:11.5px; font-weight:800; letter-spacing:.05em;
+      background:rgba(0,0,0,.3); border:1px solid transparent; }
+    .tscore.blu   { border-color:rgba(74,144,226,.6); color:#9cc4f5; }
+    .tscore.rossa { border-color:rgba(224,90,90,.6);  color:#f2a3a3; }
+    .tscore .v { color:var(--paper); font-size:18px; }
+    .seat.tblu   { border-color:rgba(74,144,226,.55); }
+    .seat.trossa { border-color:rgba(224,90,90,.55); }
+    .seat.tblu   .seat-name { color:#9cc4f5; }
+    .seat.trossa .seat-name { color:#f2a3a3; }
+
+    /* contrattazione */
+    .mode-pane { width:min(460px,94vw); margin:0 auto; padding:14px 4px calc(20px + var(--sab));
+      overflow-y:auto; max-height:100dvh; }
+    .mc-title { font-family:'Cormorant Garamond',serif; font-size:30px; color:var(--gold);
+      text-align:center; margin:8px 0 2px; }
+    .mc-sub { text-align:center; color:#cde; font-size:13px; margin:0 0 16px; line-height:1.5; }
+    .plan { display:flex; gap:8px; margin-bottom:14px; }
+    .plan .q { flex:1; padding:9px 10px; border-radius:12px; background:rgba(0,0,0,.28);
+      border:1px solid transparent; }
+    .plan .q.blu { border-color:rgba(74,144,226,.55); } .plan .q.rossa { border-color:rgba(224,90,90,.55); }
+    .plan .qt { font-size:10.5px; font-weight:800; letter-spacing:.08em; margin-bottom:5px; }
+    .plan .q.blu .qt { color:#9cc4f5; } .plan .q.rossa .qt { color:#f2a3a3; }
+    .plan .qq { display:flex; align-items:baseline; justify-content:space-between; font-size:11px; color:#cde; }
+    .plan .qq b { font-size:16px; color:var(--paper); font-weight:800; }
+    .plan .qq i { font-style:normal; font-size:10px; color:var(--muted); font-weight:600; }
+    .mode-grid { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+    .mode-btn { padding:12px 10px; border-radius:12px; font:600 13px 'Outfit',sans-serif; cursor:pointer;
+      background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.16); color:var(--paper);
+      text-align:left; transition:background .15s, border-color .15s; }
+    .mode-btn.sel { background:rgba(217,178,95,.2); border-color:var(--gold); color:var(--gold); }
+    .mode-btn.used { opacity:.32; cursor:not-allowed; }
+    .mode-btn.suit { text-align:center; font-size:16px; }
+    .mode-btn.suit.red { color:#ff9d8a; }
+    .mode-btn small { display:block; font-weight:400; font-size:10.5px; color:var(--muted); margin-top:3px; }
+    .flag { display:inline-block; font-size:9.5px; font-weight:800; letter-spacing:.06em;
+      padding:1px 6px; border-radius:6px; margin-left:6px; vertical-align:1px; }
+    .flag.pos { background:rgba(124,252,154,.2); color:#9fe0a8; }
+    .flag.gia { background:rgba(255,255,255,.12); color:var(--muted); }
+    .proposals { display:flex; flex-direction:column; gap:9px; margin-bottom:14px; }
+    .prop { display:flex; align-items:center; gap:10px; padding:13px 14px; border-radius:13px;
+      background:rgba(217,178,95,.12); border:1px solid rgba(217,178,95,.45); cursor:pointer;
+      font:700 15px 'Outfit',sans-serif; color:var(--paper); text-align:left; width:100%; }
+    .prop .n { width:24px; height:24px; border-radius:50%; background:var(--gold); color:#2a1f06;
+      display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:800; flex:none; }
+    .prop .red { color:#ff9d8a; }
+    .waiting { text-align:center; color:#cde; font-size:14px; padding:16px 0; }
+    .result-teams { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin:12px 0; }
+    .rt { border-radius:14px; padding:14px 10px; text-align:center; }
+    .rt.blu   { background:rgba(74,144,226,.16); border:1px solid rgba(74,144,226,.5); }
+    .rt.rossa { background:rgba(224,90,90,.16);  border:1px solid rgba(224,90,90,.5); }
+    .rt .lab { font-size:11px; letter-spacing:.1em; font-weight:800; }
+    .rt.blu .lab { color:#9cc4f5; } .rt.rossa .lab { color:#f2a3a3; }
+    .rt .big { font-size:32px; font-weight:800; margin:4px 0; }
+    .rt .who { font-size:11px; color:#cde; line-height:1.5; }
+    .crown { text-align:center; font-size:15px; font-weight:800; color:var(--gold); margin-bottom:6px; }
+    .btn.primary:disabled { background:rgba(255,255,255,.1); color:var(--muted); cursor:not-allowed; box-shadow:none; }
+    @media (max-width:780px) { .mc-title { font-size:24px; } }
 
     /* LOBBY */
     .lobby { background:rgba(0,0,0,.22); border:1px solid rgba(217,178,95,.3); border-radius:18px;
@@ -991,21 +1443,37 @@ function Style() {
 
     .ck-table-wrap { flex:1; display:flex; flex-direction:column; padding:12px; }
     .ck-table { position:relative; flex:1; border-radius:20px; min-height:320px;
-      background:radial-gradient(80% 80% at 50% 45%, #157a49 0%, #0e5a34 70%, #0a3d26 100%);
-      border:2px solid rgba(217,178,95,.4); box-shadow:inset 0 0 60px rgba(0,0,0,.4); }
-    .seat { position:absolute; text-align:center; font-size:15px; transition:.2s; }
-    .seat .seat-name { font-weight:600; }
-    .seat.active .seat-name { color:var(--gold); text-shadow:0 0 12px rgba(217,178,95,.6); }
-    /* giocatore che vince la presa: illuminato in verde con alone */
-    .seat.won { animation:seatWon .5s ease; }
-    .seat.won .seat-name { color:#7CFC9A; text-shadow:0 0 16px rgba(124,252,154,.9); font-weight:800; }
-    .seat.won::after { content:''; position:absolute; inset:-8px -12px; border:2px solid #7CFC9A;
-      border-radius:14px; box-shadow:0 0 24px rgba(124,252,154,.6); animation:seatWonGlow .6s ease infinite alternate; }
-    @keyframes seatWon { 0%{ transform:scale(1);} 40%{ transform:scale(1.12);} 100%{ transform:scale(1);} }
-    @keyframes seatWonGlow { to { box-shadow:0 0 34px rgba(124,252,154,.9); } }
+      /* panno pulito, senza cornice: la scena resta sul feltro come in un tavolo vero */
+      background:radial-gradient(80% 80% at 50% 45%, #16794a 0%, #0e5a34 68%, #0a3d26 100%);
+      border:none; box-shadow:inset 0 0 90px rgba(0,0,0,.34); }
+    /* ---- TARGHETTE DEI GIOCATORI ----
+       Sono ancorate ai bordi e centrate con margin:auto, MAI con transform.
+       Prima si centravano con translateX(-50%) e l'animazione della presa applicava
+       transform:scale(): il transform veniva sostituito e la targhetta saltava di lato.
+       Ora l'evidenziazione cambia soltanto colori e alone, quindi non si muove nulla. */
+    .seat { position:absolute; display:flex; align-items:center; gap:8px;
+      padding:6px 11px; border-radius:999px; width:max-content; max-width:92%;
+      font-size:12.5px; line-height:1.2; white-space:nowrap; flex:none;
+      background:rgba(0,0,0,.34); border:1px solid rgba(255,255,255,.13);
+      transition:background .25s ease, border-color .25s ease, box-shadow .25s ease; }
+    /* il nome non si comprime mai: prima veniva schiacciato a zero dal flex */
+    .seat .seat-name { font-weight:600; flex:0 0 auto; overflow:hidden; text-overflow:ellipsis; }
+    /* turno in corso: oro */
+    .seat.active { border-color:rgba(217,178,95,.75); background:rgba(217,178,95,.16);
+      box-shadow:0 0 16px rgba(217,178,95,.25); }
+    .seat.active .seat-name { color:var(--gold); }
+    /* chi vince la presa: verde. Pulsa solo l'alone, la posizione resta ferma. */
+    .seat.won { border-color:rgba(124,252,154,.8); background:rgba(124,252,154,.15);
+      animation:seatWonGlow .7s ease infinite alternate; }
+    .seat.won .seat-name { color:#7CFC9A; }
+    @keyframes seatWonGlow {
+      from { box-shadow:0 0 10px rgba(124,252,154,.25); }
+      to   { box-shadow:0 0 26px rgba(124,252,154,.55); }
+    }
 
-    /* badge centrale col nome del vincitore + punti */
-    .trick-winner { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
+    /* Cartellino del vincitore: sta IN ALTO, non al centro, altrimenti copre
+       il mazzetto proprio mentre le carte si radunano e non si vede l'animazione. */
+    .trick-winner { position:absolute; top:14%; left:50%; transform:translate(-50%,-50%);
       display:flex; flex-direction:column; align-items:center; gap:4px; z-index:40; pointer-events:none;
       animation:twPop .35s cubic-bezier(.2,1.4,.4,1); }
     .tw-name { font-size:22px; font-weight:800; color:#fff; text-shadow:0 2px 8px rgba(0,0,0,.7);
@@ -1014,54 +1482,82 @@ function Style() {
     .tw-pts.pos { color:#7CFC9A; text-shadow:0 0 12px rgba(124,252,154,.7); }
     .tw-pts.neg { color:#ff7676; text-shadow:0 0 12px rgba(255,118,118,.7); }
     @keyframes twPop { 0%{ transform:translate(-50%,-50%) scale(.5); opacity:0; } 100%{ transform:translate(-50%,-50%) scale(1); opacity:1; } }
-    .seat.active::after { content:''; position:absolute; inset:-6px -10px; border:1px solid var(--gold);
-      border-radius:12px; opacity:.6; }
-    .seat-meta { display:flex; gap:12px; justify-content:center; font-size:13px; color:#cde; }
-    .seat.top { top:14px; left:50%; transform:translateX(-50%); }
-    .seat.bottom { bottom:10px; left:50%; transform:translateX(-50%); }
-    .seat.left { left:16px; top:50%; transform:translateY(-50%); }
-    .seat.right { right:16px; top:50%; transform:translateY(-50%); }
-    .seat-cards { display:flex; gap:-6px; justify-content:center; margin-top:5px; position:relative; }
-    .mini-back { width:15px; height:22px; margin-left:-4px; border-radius:2px;
+    /* max-width+overflow: i dorsi non sbordano mai dal bordo della pillola */
+    .seat-meta { display:flex; align-items:center; gap:8px; font-size:11.5px; color:#cde;
+      max-width:100%; overflow:hidden; }
+    .seat-meta .tot { color:var(--muted); }
+    /* centratura senza transform: i margini automatici fanno il lavoro */
+    .seat.top    { top:10px;    left:0; right:0; margin-inline:auto; }
+    .seat.bottom { bottom:10px; left:0; right:0; margin-inline:auto; }
+    /* ai lati la targhetta è verticale e stretta, per non invadere il centro */
+    .seat.left, .seat.right { top:0; bottom:0; height:max-content; margin-block:auto;
+      flex-direction:column; gap:4px; padding:8px 7px; border-radius:14px;
+      max-width:84px; text-align:center; }
+    .seat.left  { left:8px; }
+    .seat.right { right:8px; }
+    .seat.left .seat-name, .seat.right .seat-name { max-width:66px; }
+    .seat.left .seat-meta, .seat.right .seat-meta { flex-direction:column; gap:2px; }
+    /* dorsi delle carte in mano agli avversari */
+    .seat-cards { display:flex; align-items:center; justify-content:center; }
+    .mini-back { width:11px; height:16px; margin-left:-3px; border-radius:2px; flex:none;
       background:repeating-linear-gradient(45deg,#7a1f2b,#7a1f2b 3px,#5c1520 3px,#5c1520 6px); border:1px solid rgba(0,0,0,.3); }
-    .seat-cards .count { font-size:12px; margin-left:6px; color:#bcd; }
+    .mini-back:first-child { margin-left:0; }
+    .seat-cards .count { font-size:11px; margin-left:5px; color:#bcd; }
 
     .ck-center { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; }
-    /* l'area delle carte giocate non deve mai uscire dallo schermo */
-    .played { position:relative; width:min(440px, 88vw); height:min(350px, 38vh); }
-    .played-card { position:absolute; }
-    .played-card .pc-name { display:block; font-size:12px; text-align:center; color:#cde; margin-top:3px; }
-    .played-card.seat-bottom { bottom:0; left:50%; transform:translateX(-50%); }
-    .played-card.seat-top { top:0; left:50%; transform:translateX(-50%); }
-    .played-card.seat-left { left:0; top:50%; transform:translateY(-50%); }
-    .played-card.seat-right { right:0; top:50%; transform:translateY(-50%); }
+    /* area delle carte giocate: non esce dallo schermo e lascia libere
+       le fasce laterali dove stanno le targhette dei due avversari */
+    .played { position:relative; height:min(360px, 40vh);
+      width:clamp(210px, calc(100% - 175px), 460px);
+      --pc-w: 112px;     /* larghezza delle carte in tavola */
+      --sx: 174px;       /* quanto le carte laterali stanno lontano dal centro */
+      --sy: 92px; }      /* quanto stanno lontano quella sopra e quella sotto */
+    .played-card { position:absolute; left:50%; top:50%; }
+    .played-card .pc-name { display:block; font-size:11px; text-align:center; color:#cde; margin-top:4px; }
+    /* le carte in tavola sono più grandi di quelle in mano: sono il centro della scena */
+    .played-card .ck-card { width:var(--pc-w); height:calc(var(--pc-w) * 1.44);
+      border-radius:calc(var(--pc-w) * .1); box-shadow:0 6px 16px rgba(0,0,0,.4); }
+    .played-card .ck-card .pip    { font-size:calc(var(--pc-w) * .46); }
+    .played-card .ck-card .corner { font-size:calc(var(--pc-w) * .19); }
+    .played-card .ck-card .corner.tl { top:6%; left:6%; }
+    .played-card .ck-card .corner.br { bottom:6%; right:6%; }
+    /* Tutte le carte hanno lo STESSO ancoraggio (il centro) e si posizionano
+       soltanto con transform. Prima cambiavano anche left/top/bottom, che non
+       sono nella transizione: all'inizio del raduno la carta saltava di colpo
+       di ~30px e poi scivolava — era quello lo scatto. Ora si muove solo il
+       transform, quindi il movimento è continuo dall'inizio alla fine. */
+    .played-card.seat-bottom { transform:translate(-50%, calc(-50% + var(--sy))); }
+    .played-card.seat-top    { transform:translate(-50%, calc(-50% - var(--sy))); }
+    .played-card.seat-left   { transform:translate(calc(-50% - var(--sx)), -50%); }
+    .played-card.seat-right  { transform:translate(calc(-50% + var(--sx)), -50%); }
     .played-card.flash .ck-card { animation:cardIn .28s ease; }
     @keyframes cardIn { 0%{ opacity:0; } 100%{ opacity:1; } }
 
-    /* --- animazione raccolta presa (lenta e morbida) --- */
-    .played.collecting .played-card { transition: transform 1s cubic-bezier(.25,.1,.25,1), opacity .6s ease; }
-    .played.collecting .pc-name { opacity:0; transition:opacity .3s; }
-    /* la carta di chi ha vinto resta SOPRA il mazzetto */
+    /* --- RACCOLTA DELLA PRESA, IN DUE TEMPI ---
+       Il server tiene le carte in tavola 900ms dopo aver annunciato il vincitore.
+       380ms per radunarle al centro + 500ms per il volo = 880ms: ci sta dentro.
+       (La vecchia transizione unica da 1s veniva troncata a metà.) */
+    .played.collecting .pc-name { opacity:0; transition:opacity .2s; }
     .played.collecting .played-card { z-index:10; }
-    .played.collecting .winner-card { z-index:30; }
+    .played.collecting .winner-card { z-index:30; }  /* la carta vincente resta sopra */
 
-    /* FASE 1 (gather): le carte si impilano al centro perfettamente allineate (solo traslazione) */
-    .played.phase-gather .played-card.seat-bottom,
-    .played.phase-gather .played-card.seat-top,
-    .played.phase-gather .played-card.seat-left,
-    .played.phase-gather .played-card.seat-right { left:50%; top:50%; bottom:auto; transform:translate(-50%,-50%); }
+    /* TEMPO 1 — tutte e quattro convergono nello STESSO punto, perfettamente
+       sovrapposte: solo traslazione, nessuna rotazione. L'andatura parte piano,
+       accelera e si posa dolcemente (niente strappo iniziale). */
+    .played.phase-gather .played-card {
+      transform:translate(-50%,-50%);
+      transition: transform .44s cubic-bezier(.4, 0, .2, 1); }
 
-    /* FASE 2 (fly): il mazzetto compatto scivola verso il bordo del vincitore */
-    .played.phase-fly .played-card { left:50%; top:50%; bottom:auto; }
-    .played.phase-fly .fly-to-bottom { transform:translate(-50%, 320px) scale(.55); opacity:0; }
-    .played.phase-fly .fly-to-top    { transform:translate(-50%, -320px) scale(.55); opacity:0; }
-    .played.phase-fly .fly-to-left   { transform:translate(-400px, -50%) scale(.55); opacity:0; }
-    .played.phase-fly .fly-to-right  { transform:translate(400px, -50%) scale(.55); opacity:0; }
-    .played.phase-fly .fly-to-left   { transform:translate(-400px, -50%) scale(.55); opacity:0; }
-    .played.phase-fly .fly-to-right  { transform:translate(400px, -50%) scale(.55); opacity:0; }
+    /* TEMPO 2 — la pila compatta parte lenta e accelera via, verso chi ha preso */
+    .played.phase-fly .played-card {
+      transition: transform .44s cubic-bezier(.55, 0, .85, .6), opacity .38s ease .06s; }
+    .played.phase-fly .fly-to-bottom { transform:translate(-50%, calc(-50% + 340px)) scale(.55); opacity:0; }
+    .played.phase-fly .fly-to-top    { transform:translate(-50%, calc(-50% - 340px)) scale(.55); opacity:0; }
+    .played.phase-fly .fly-to-left   { transform:translate(calc(-50% - 340px), -50%) scale(.55); opacity:0; }
+    .played.phase-fly .fly-to-right  { transform:translate(calc(-50% + 340px), -50%) scale(.55); opacity:0; }
     .ck-msg { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); width:260px;
       text-align:center; font-size:15px; color:#dce; opacity:.85; }
-    .your-turn { position:absolute; bottom:16px; left:50%; transform:translateX(-50%);
+    .your-turn { position:absolute; bottom:44px; left:50%; transform:translateX(-50%);
       background:var(--gold); color:#2a1f06; padding:8px 22px; border-radius:22px; font-weight:700;
       font-size:16px; letter-spacing:.05em; animation:glow 1.4s infinite; }
     @keyframes glow { 50%{ box-shadow:0 0 18px rgba(217,178,95,.8);} }
@@ -1130,7 +1626,9 @@ function Style() {
     /* mano a ventaglio: carte sovrapposte lungo un arco */
     .fan-hand { display:flex; flex-direction:column; align-items:center; gap:0; width:100%;
       --fan-cw:64px; --fan-ch:92px; }
-    .fan-row { position:relative; width:100%; height:calc(var(--fan-ch) + 14px); }
+    /* +20px: spazio per la discesa ad arco delle carte esterne, che altrimenti
+       uscirebbero dalla riga e finirebbero sotto il bordo dello schermo */
+    .fan-row { position:relative; width:100%; height:calc(var(--fan-ch) + 20px); }
     .fan-slot { position:absolute; top:0; left:50%; margin-left:calc(var(--fan-cw) / -2);
       transform-origin:50% 85%; transition:transform .18s ease; }
     /* dimensioni e testo della carta scalano col ventaglio */
@@ -1250,14 +1748,22 @@ function Style() {
       .menu-toggle { width:30px; height:30px; font-size:16px; margin-right:6px; }
       .ck-progress { padding:3px; font-size:10px; }
       .game .ck-table { margin:6px 6px 0; }
-      .seat { font-size:12px; }
-      .seat-meta { gap:7px; font-size:11px; }
-      .seat.top { top:8px; } .seat.bottom { bottom:6px; }
-      .seat.left { left:6px; } .seat.right { right:6px; }
-      .mini-back { width:11px; height:16px; }
-      .played-card .pc-name { font-size:10px; }
+      .seat { font-size:11.5px; padding:5px 9px; gap:6px; }
+      .seat-meta { gap:6px; font-size:10.5px; }
+      .seat.top { top:7px; } .seat.bottom { bottom:7px; }
+      .seat.left { left:5px; } .seat.right { right:5px; }
+      .seat.left, .seat.right { max-width:74px; padding:7px 6px; }
+      .seat.left .seat-name, .seat.right .seat-name { max-width:60px; }
+      .mini-back { width:9px; height:13px; }
+      .played { --pc-w: 96px; --sx: 57px; --sy: 102px; }
+      /* con le carte grandi il mazzetto si sovrappone e coprirebbe le etichette:
+         su telefono la posizione della carta dice già chi l'ha giocata */
+      .played-card .pc-name { display:none; }
       .hand-label { font-size:10px; margin-bottom:4px; }
-      .your-turn { bottom:8px; padding:6px 16px; font-size:14px; }
+      .your-turn { bottom:40px; padding:5px 14px; font-size:12px; letter-spacing:.04em; }
+      .ck-hand { margin-top:6px; }
+      .tw-name { font-size:18px; padding:5px 14px; }
+      .tw-pts { font-size:22px; }
       .tp-suit { width:70px; padding:10px 0; }
       .tp-suit span { font-size:24px; }
     }

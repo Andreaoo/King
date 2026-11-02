@@ -102,6 +102,8 @@ export const DOMINO_RANKS = ["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", 
 export const dominoValue = (r) => DOMINO_RANKS.indexOf(r);
 
 export function dominoValidCards(hand, board) {
+  // apertura: chi ha il 7 di quadri inizia e deve calare proprio quello
+  if (!Object.keys(board).length) return hand.filter((c) => c.rank === "7" && c.suit === "diamonds");
   return hand.filter((c) => {
     const b = board[c.suit];
     if (!b) return c.rank === "7";

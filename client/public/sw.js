@@ -1,7 +1,8 @@
 // Service worker minimale: abilita l'installazione PWA e mette in cache il guscio.
 // NON tocca la logica di gioco; il multiplayer resta sempre live via WebSocket.
-const CACHE = "cartking-v1";
-const SHELL = ["/", "/index.html", "/manifest.webmanifest", "/icon-192.png", "/icon-512.png"];
+const CACHE = "cartking-v3";
+const SHELL = ["/", "/index.html", "/manifest.webmanifest", "/icon-192.png", "/icon-512.png",
+  ...["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"].flatMap((r) => ["hearts", "diamonds", "clubs", "spades"].map((s) => `/cards/${r}${s}.jpg`))];
 
 self.addEventListener("install", (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));

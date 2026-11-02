@@ -259,6 +259,10 @@ export class GameRoom {
         if (this.matchOver()) { this.status = "gameOver"; this.stopWatchdog(); this.emit(); return; }
         this.proposer = s;
         this.decider = this.partnerOf(s);
+        // le carte si distribuiscono subito: tutti e 4 le vedono mentre la coppia sceglie
+        // il gioco, e la mano poi si gioca con queste stesse carte (vedi startMode)
+        this.hands = dealCards(shuffleDeck(createDeck()));
+        this.preDealt = true;
         this.phase = "propose";
         this.status = "choosing";
         this.message = `${this.players[s].name} propone due modalità al compagno`;
@@ -339,7 +343,10 @@ export class GameRoom {
     }
 
     startMode() {
-        const dealt = dealCards(shuffleDeck(createDeck()));
+        // carte già date durante la contrattazione (coppie); altrimenti, o se si
+        // rimescola per i 4 estremi del Domino, si distribuisce adesso
+        const dealt = this.preDealt ? this.hands : dealCards(shuffleDeck(createDeck()));
+        this.preDealt = false;
         this.hands = dealt;
         this.table = [];
         this.handScores = [0, 0, 0, 0];

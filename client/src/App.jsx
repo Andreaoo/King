@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { io } from "socket.io-client";
 
 // In produzione il client è servito dallo stesso server Node → stesso origin.
@@ -266,14 +266,23 @@ function Home({ view, setView, name, setName, difficulty, setDifficulty, gameTyp
   const cameFromLink = urlRoom && view === "join";
   return (
     <div className="home">
-      <div className="home-logo">🃏</div>
-      <h1 className="home-title">CART KING</h1>
-      <p className="home-sub">Barbu · 13 mani · multiplayer online</p>
+      <div className="home-hero">
+        {/* ventaglio decorativo con le carte vere del mazzo */}
+        <div className="home-fan" aria-hidden>
+          {["Aspades", "Khearts", "Qdiamonds", "Jclubs"].map((f, i) => (
+            <img key={f} src={`/cards/${f}.jpg`} alt="" draggable={false} style={{ "--i": i }} />
+          ))}
+        </div>
+        <h1 className="home-title">CART KING</h1>
+        <p className="home-sub">Barbu · 13 mani · multiplayer online</p>
+        <div className="home-suits" aria-hidden><span>♠</span><span className="r">♥</span><span>♣</span><span className="r">♦</span></div>
+      </div>
 
       {cameFromLink && (
         <div className="invite-note">Sei stato invitato nella stanza <b>{urlRoom}</b> — scrivi il tuo nome ed entra.</div>
       )}
 
+      <div className="home-panel">
       <label className="field">Nome
         <input value={name} maxLength={14} onChange={(e) => setName(e.target.value)} placeholder="Il tuo nome" />
       </label>
@@ -315,6 +324,7 @@ function Home({ view, setView, name, setName, difficulty, setDifficulty, gameTyp
           </div>
         </>
       )}
+      </div>
       {error && <p className="err">{error}</p>}
       <InstallHint />
       <p className="home-note">Condividi il codice stanza con gli amici. I posti liberi vengono riempiti da bot quando il proprietario avvia.</p>
@@ -589,7 +599,22 @@ const ALL_MODES = ["noKingsJacks","noQueens","no8Diamonds","noKingHearts","noHea
    Chi propone manda due modalità al COMPAGNO di squadra, che ne accetta una
    oppure ne sceglie una terza. Il seme di «Seme scelto» si dichiara subito,
    insieme alla proposta.                                                     */
-function ModeChoice({ s, onPropose, onDecide }) {
+function ModeChoice(props) {
+  const hand = useMemo(() => sortForFan(props.s.myHand || []), [props.s.myHand]);
+  return (
+    <div className="mc-wrap">
+      <ModeChoiceBody {...props} />
+      {hand.length > 0 && (
+        <div className="mc-hand">
+          <div className="hand-label">LE TUE CARTE</div>
+          <FanHand cards={hand} budgetRatio={0.3} renderCard={(c) => <Card card={c} />} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ModeChoiceBody({ s, onPropose, onDecide }) {
   const [sel, setSel] = useState([]);        // [{key, trump}]
   const [altKey, setAltKey] = useState(null); // terza scelta in attesa del seme
   const io = s.youSeat;
@@ -741,6 +766,9 @@ function Game({ state: s, pid, guardedAct, onPlay, onTrump, onBlind, onPass, onN
   const myValid = useMemo(() => {
     if (!s.myHand) return [];
     if (s.modeKey === "domino") {
+      // apertura: si cala per forza il 7 di quadri (stessa regola del server)
+      if (!Object.keys(s.dominoBoard || {}).length)
+        return s.myHand.filter((c) => c.rank === "7" && c.suit === "diamonds").map((c) => c.id);
       return s.myHand.filter((c) => {
         const b = s.dominoBoard[c.suit];
         if (!b) return c.rank === "7";
@@ -850,7 +878,7 @@ function Game({ state: s, pid, guardedAct, onPlay, onTrump, onBlind, onPass, onN
         </div>
       )}
 
-      <div className="ck-table">
+      <div className={`ck-table ${s.modeKey === "domino" ? "is-domino" : ""}`}>
         {s.players.map((p, i) => (
           <div key={i} className={`seat ${seatOf(i)} ${s.gameType === "teams" ? (s.teams[i] === 0 ? "tblu" : "trossa") : ""} ${s.turn === i ? "active" : ""} ${s.collecting === i ? "won" : ""}`}>
             <span className="seat-name">{p.bot ? "🤖" : "👤"} {p.name}{i === seat ? " (tu)" : ""}{!p.connected && " 🔌"}</span>
@@ -1085,7 +1113,7 @@ function useBox() {
   return [ref, w, vh];
 }
 
-function FanHand({ cards, renderCard }) {
+function FanHand({ cards, renderCard, budgetRatio = 0.36 }) {
   const [ref, w, vh] = useBox();
   const n = cards.length;
 
@@ -1099,7 +1127,7 @@ function FanHand({ cards, renderCard }) {
   // ma senza mai superare l'altezza concessa alla mano (ROW_PAD = spazio per l'arco)
   const ROW_PAD = 20;
   const avail = Math.max(w || (typeof window !== "undefined" ? window.innerWidth : 360), 260) - 10;
-  const budget = Math.min(vh * 0.36, 330);                    // altezza massima del ventaglio
+  const budget = Math.min(vh * budgetRatio, 330);             // altezza massima del ventaglio
   const maxCH = Math.max(58, budget / rows.length - ROW_PAD); // altezza carta consentita
   const CW = Math.round(Math.min(96, maxCH / 1.44, Math.max(52, avail / 4.6)));
   const CH = Math.round(CW * 1.44);
@@ -1139,46 +1167,112 @@ function Card({ card, onClick, disabled, small, highlight, dim, faceDown }) {
     <button className={`ck-card ${small ? "small" : ""} ${red ? "red" : "black"} ${disabled ? "disabled" : ""} ${highlight ? "danger" : ""} ${dim ? "dim" : ""}`}
       onClick={onClick} disabled={disabled || !onClick}
       aria-label={`${RANK_LABEL[card.rank] || card.rank} di ${SUIT_NAME[card.suit]}`}>
-      <span className="corner tl">{RANK_LABEL[card.rank] || card.rank}<br />{SUIT_SYMBOL[card.suit]}</span>
-      <span className="pip">{SUIT_SYMBOL[card.suit]}</span>
-      <span className="corner br">{RANK_LABEL[card.rank] || card.rank}<br />{SUIT_SYMBOL[card.suit]}</span>
+      {/* immagine illustrata della carta (client/public/cards/<rank><suit>.jpg) */}
+      <img className="face-img" src={`/cards/${card.rank}${card.suit}.jpg`} alt="" draggable={false} />
     </button>
   );
 }
 
+// Sceglie come disporre il tabellone nello spazio libero (w×h): 4 file o 2×2,
+// carte intere oppure solo la parte alta (indice e seme) quando lo spazio è poco.
+const DOM_TRACK = 3 + 2 * 0.14;  // tre posti (mazzo basso, 7, mazzo alto) e due spazi
+function dominoLayout(w, h) {
+  let best = null;
+  for (const cols of [1, 2]) {
+    for (const cut of [1.5, 0.66]) {
+      const rows = 4 / cols;
+      const cwW = ((w - 24 - (cols - 1) * 22) / cols - 34) / DOM_TRACK;
+      const cwH = (h - 16 - (rows - 1) * 8) / rows / cut;
+      const cw = Math.min(cwW, cwH, 110);
+      const score = cut === 1.5 ? cw : cw * 0.72;   // le carte intere sono preferite
+      if (!best || score > best.score) best = { cols, cut, cw, score };
+    }
+  }
+  return best;
+}
+
+// Tabellone del Domino: per ogni seme il 7 al centro e, di fianco, un mazzo per lato.
+// A sinistra si posano 6, 5, 4… ognuna sopra la precedente; a destra 8, 9, 10…
+// Si vede la carta in cima; le altre sotto danno lo spessore del mazzo.
+// Occupa solo lo spazio del tavolo non coperto dalle targhette dei giocatori.
 function DominoBoard({ board }) {
   const sevenIdx = DOMINO_RANKS.indexOf("7");
+  const ref = useRef(null);
+  const [box, setBox] = useState(null);
+
+  useLayoutEffect(() => {
+    const table = ref.current?.closest(".ck-table");
+    if (!table) return;
+    const measure = () => {
+      const T = table.getBoundingClientRect();
+      const PAD = 8;
+      // la pillola "È IL TUO TURNO" sta sopra la targhetta in basso solo se il tavolo è alto
+      const PILL = T.height > 300 ? 40 : 0;
+      let top = PAD, bottom = T.height - PAD, left = PAD, right = T.width - PAD;
+      const sides = [];
+      // le targhette si classificano per dove stanno davvero (il CSS può spostarle negli angoli)
+      for (const el of table.querySelectorAll(".seat")) {
+        const r = el.getBoundingClientRect();
+        const R = { l: r.left - T.left, t: r.top - T.top, r: r.right - T.left, b: r.bottom - T.top };
+        const cx = (R.l + R.r) / 2, upper = (R.t + R.b) / 2 < T.height / 2;
+        if (Math.abs(cx - T.width / 2) < T.width * 0.2) {
+          if (upper) top = Math.max(top, R.b + PAD);
+          else bottom = Math.min(bottom, R.t - PAD - PILL);
+        } else sides.push({ ...R, left: cx < T.width / 2, upper });
+      }
+      // targhette di lato/angolo: si restringe ai lati oppure si evita in altezza, quel che rende di più
+      let l2 = left, r2 = right, t2 = top, b2 = bottom;
+      for (const sd of sides) {
+        if (sd.left) l2 = Math.max(l2, sd.r + PAD); else r2 = Math.min(r2, sd.l - PAD);
+        if (sd.upper) t2 = Math.max(t2, sd.b + PAD); else b2 = Math.min(b2, sd.t - PAD);
+      }
+      const a = { left: l2, top, w: r2 - l2, h: bottom - top };
+      const b = { left, top: t2, w: right - left, h: b2 - t2 };
+      const la = dominoLayout(a.w, a.h), lb = dominoLayout(b.w, b.h);
+      const pick = la.score >= lb.score ? { ...a, ...la } : { ...b, ...lb };
+      const next = { left: Math.round(pick.left), top: Math.round(pick.top), w: Math.round(pick.w),
+        h: Math.round(pick.h), cols: pick.cols, cut: pick.cut, cw: Math.max(18, Math.floor(pick.cw)) };
+      setBox((prev) => (prev && Object.keys(next).every((k) => prev[k] === next[k]) ? prev : next));
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(table);
+    table.querySelectorAll(".seat").forEach((el) => ro.observe(el));
+    return () => ro.disconnect();
+  }, [board]);
+
   return (
-    <div className="domino-board">
-      {SUITS.map((s) => {
-        const b = board[s];
-        const started = !!b;
-        // carta più bassa e più alta giocate (oltre al 7 centrale)
-        const lowLabel = started && b.low < sevenIdx ? (RANK_LABEL[DOMINO_RANKS[b.low]] || DOMINO_RANKS[b.low]) : null;
-        const highLabel = started && b.high > sevenIdx ? (RANK_LABEL[DOMINO_RANKS[b.high]] || DOMINO_RANKS[b.high]) : null;
-        return (
-          <div key={s} className={`domino-row ${SUIT_RED[s] ? "red" : "black"} ${started ? "" : "waiting"}`}>
-            <span className="ds">{SUIT_SYMBOL[s]}</span>
-            <div className="domino-track">
-              {/* lato basso (2…6) */}
-              <div className="dom-side low">
-                {lowLabel ? <span className="dom-slot filled">{lowLabel}</span>
-                          : <span className="dom-slot empty">·</span>}
-              </div>
-              {/* centro: il 7 */}
-              <div className="dom-center">
-                {started ? <span className="dom-slot seven">7</span>
-                         : <span className="dom-slot empty7">7</span>}
-              </div>
-              {/* lato alto (8…A) */}
-              <div className="dom-side high">
-                {highLabel ? <span className="dom-slot filled">{highLabel}</span>
-                           : <span className="dom-slot empty">·</span>}
+    <div ref={ref} className="domino-area"
+      style={box ? { left: box.left, top: box.top, width: box.w, height: box.h } : { inset: 0, visibility: "hidden" }}>
+      <div className={`domino-board ${box?.cut < 1 ? "cut" : ""}`}
+        style={{ "--cw": `${box?.cw || 40}px`, "--cut": box?.cut || 1.5, gridTemplateColumns: `repeat(${box?.cols || 1}, auto)` }}>
+        {SUITS.map((s) => {
+          const b = board[s];
+          const started = !!b;
+          // pile: dalla carta vicina al 7 verso l'esterno, l'ultima posata sta in cima
+          const low = started ? DOMINO_RANKS.slice(b.low, sevenIdx).reverse() : [];
+          const high = started ? DOMINO_RANKS.slice(sevenIdx + 1, b.high + 1) : [];
+          const pile = (ranks, cls) => (
+            <div className={`dom-slot ${cls}`}>
+              {ranks.map((r, k) => (
+                <span key={r} className="dom-card" style={{ "--d": Math.min(ranks.length - 1 - k, 4), zIndex: k }}>
+                  <img src={`/cards/${r}${s}.jpg`} alt={`${RANK_LABEL[r] || r} di ${SUIT_NAME[s]}`} draggable={false} />
+                </span>
+              ))}
+            </div>
+          );
+          return (
+            <div key={s} className={`domino-row ${SUIT_RED[s] ? "red" : "black"} ${started ? "" : "dom-waiting"}`}>
+              <span className="ds">{SUIT_SYMBOL[s]}</span>
+              <div className="domino-track">
+                {pile(low, "low")}
+                {pile(started ? ["7"] : [], "seven")}
+                {pile(high, "high")}
               </div>
             </div>
-          </div>
-        );
-      })}
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -1215,7 +1309,10 @@ function Style() {
       --sal: env(safe-area-inset-left, 0px); --sar: env(safe-area-inset-right, 0px);
       min-height: 100vh; min-height: 100dvh; /* dvh: su iOS esclude le barre di Safari */
       margin:0; font-family:'Outfit',system-ui,sans-serif;
-      background: radial-gradient(120% 120% at 50% 0%, #14663f 0%, var(--felt) 45%, var(--felt2) 100%);
+      background:
+        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 .07 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E"),
+        radial-gradient(120% 120% at 50% 0%, #14663f 0%, var(--felt) 45%, var(--felt2) 100%);
+      background-attachment:fixed;
       color: var(--paper);
       /* niente rimbalzo elastico, pull-to-refresh, lampo grigio al tap o zoom al doppio tap */
       overscroll-behavior: none;
@@ -1230,12 +1327,44 @@ function Style() {
     .neg { color:#ff9d8a; } .pos { color:#9fe0a8; }
 
     /* HOME */
-    .home { text-align:center; max-width:440px; }
-    .home-logo { font-size:64px; }
-    .home-title { font-family:'Cormorant Garamond',serif; font-size:64px; letter-spacing:.06em;
-      margin:.1em 0; color:var(--gold); text-shadow:0 2px 20px rgba(0,0,0,.4); }
-    .home-sub { color:#d7e7dc; margin-top:-.2em; letter-spacing:.02em; }
-    .home-actions { display:flex; flex-direction:column; gap:12px; margin:28px 0; }
+    .home { text-align:center; width:min(460px,100%); margin:0 auto; min-height:100dvh;
+      display:flex; flex-direction:column; justify-content:center;
+      padding:calc(22px + var(--sat)) calc(16px + var(--sar)) calc(22px + var(--sab)) calc(16px + var(--sal)); }
+    .home-hero { margin-bottom:18px; }
+    .home-fan { position:relative; width:220px; height:122px; margin:0 auto 4px; }
+    .home-fan img { position:absolute; left:50%; bottom:0; width:70px; height:105px; margin-left:-35px;
+      border-radius:7px; box-shadow:0 8px 18px rgba(0,0,0,.45), 0 0 0 1px rgba(0,0,0,.15);
+      transform-origin:50% 135%; transform:rotate(calc((var(--i) - 1.5) * 13deg));
+      animation:homeFan .8s cubic-bezier(.2,.9,.3,1.15) both; animation-delay:calc(var(--i) * 90ms); }
+    @keyframes homeFan { from { transform:rotate(0deg) translateY(16px); opacity:0; } }
+    .home-title { font-family:'Cormorant Garamond',serif; font-weight:700; font-size:clamp(46px,13vw,70px);
+      line-height:1; letter-spacing:.07em; margin:10px 0 6px;
+      background:linear-gradient(180deg,#fbeab8 0%,#e2bd68 48%,#a87d2e 100%);
+      -webkit-background-clip:text; background-clip:text; color:transparent;
+      filter:drop-shadow(0 3px 10px rgba(0,0,0,.45)); }
+    .home-sub { color:#d7e7dc; margin:0; letter-spacing:.06em; font-size:14px; }
+    .home-suits { display:flex; justify-content:center; gap:14px; margin-top:10px; font-size:15px;
+      color:rgba(246,241,230,.55); }
+    .home-suits .r { color:rgba(255,140,122,.75); }
+    .home-suits::before, .home-suits::after { content:""; align-self:center; width:44px; height:1px;
+      background:linear-gradient(90deg,transparent,rgba(217,178,95,.6)); }
+    .home-suits::after { transform:scaleX(-1); }
+    .home-panel { text-align:left; padding:20px 18px 2px; border-radius:22px;
+      background:linear-gradient(180deg,rgba(0,0,0,.32),rgba(0,0,0,.2));
+      border:1px solid rgba(217,178,95,.28);
+      box-shadow:0 22px 50px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.06); backdrop-filter:blur(4px); }
+    .home .field { letter-spacing:.12em; font-size:11px; font-weight:600; color:#cfe0d4; }
+    .home .field input:focus { outline:none; border-color:var(--gold); background:rgba(255,255,255,.09);
+      box-shadow:0 0 0 3px rgba(217,178,95,.22); }
+    .home .field input::placeholder { color:rgba(246,241,230,.4); }
+    .home .opt:hover:not(.sel) { background:rgba(255,255,255,.08); }
+    .home .seg button:hover:not(.on) { background:rgba(255,255,255,.1); }
+    .home .home-note { margin:14px 6px 0; }
+    .home .err { color:#ff9d8a; font-weight:600; margin:12px 0 0; }
+    .home-actions { display:flex; flex-direction:column; gap:12px; margin:22px 0 18px; }
+    .home-actions .btn.primary { background:linear-gradient(180deg,#f0d088 0%,var(--gold) 45%,var(--gold2) 100%);
+      box-shadow:0 4px 0 #7d5f22, 0 10px 22px rgba(0,0,0,.35); }
+    .home-actions .btn.primary:active { transform:translateY(3px); box-shadow:0 1px 0 #7d5f22, 0 6px 14px rgba(0,0,0,.35); }
     .btn { border:none; border-radius:12px; padding:16px 22px; font-size:16px; font-weight:600;
       letter-spacing:.04em; transition:transform .1s, box-shadow .2s; }
     .btn:active { transform:translateY(1px); }
@@ -1318,7 +1447,12 @@ function Style() {
     .seat.tblu   .seat-name { color:#9cc4f5; }
     .seat.trossa .seat-name { color:#f2a3a3; }
 
-    /* contrattazione */
+    /* contrattazione: la scelta scorre in alto, la propria mano resta in basso */
+    .mc-wrap { display:flex; flex-direction:column; height:100vh; height:100dvh; }
+    .mc-wrap .mode-pane { flex:1 1 auto; min-height:0; max-height:none; }
+    .mc-hand { flex:none; text-align:center; padding:6px calc(6px + var(--sar)) calc(8px + var(--sab)) calc(6px + var(--sal));
+      background:linear-gradient(180deg,rgba(0,0,0,0),rgba(0,0,0,.25)); border-top:1px solid rgba(217,178,95,.2); }
+    .mc-hand .ck-card { cursor:default; }
     .mode-pane { width:min(460px,94vw); margin:0 auto; padding:14px 4px calc(20px + var(--sab));
       overflow-y:auto; max-height:100dvh; }
     .mc-title { font-family:'Cormorant Garamond',serif; font-size:30px; color:var(--gold);
@@ -1600,6 +1734,8 @@ function Style() {
       display:flex; align-items:center; justify-content:center; transition:transform .12s, box-shadow .2s; padding:0; }
     .ck-card.small { width:52px; height:74px; }
     .ck-card.red { color:var(--danger); }
+    .ck-card .face-img { position:absolute; inset:0; width:100%; height:100%; border-radius:inherit;
+      object-fit:fill; pointer-events:none; user-select:none; }
     .ck-card .pip { font-size:30px; }
     .ck-card.small .pip { font-size:22px; }
     .ck-card .corner { position:absolute; font-size:11px; font-weight:700; line-height:1; text-align:center; }
@@ -1664,22 +1800,41 @@ function Style() {
     .blind-yes:hover { filter:brightness(1.08); }
     .blind-no:hover { background:rgba(255,255,255,.16); }
 
-    /* DOMINO */
-    .domino-board { background:rgba(0,0,0,.28); border-radius:16px; padding:18px 20px; width:min(500px,92vw);
-      display:flex; flex-direction:column; gap:14px; }
-    .domino-row { display:flex; align-items:center; gap:16px; }
-    .domino-row.waiting { opacity:.55; }
-    .domino-row.red .ds { color:#ff9d8a; }
-    .ds { font-size:40px; width:46px; text-align:center; flex-shrink:0; }
-    .domino-track { display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px; flex:1; align-items:center; }
-    .dom-side, .dom-center { display:flex; justify-content:center; }
-    .dom-slot { display:flex; align-items:center; justify-content:center; width:70px; height:96px; border-radius:12px;
-      font-size:36px; font-weight:800; }
-    .dom-slot.filled { background:linear-gradient(160deg,#fff,#eef1f6); color:#1a2233; box-shadow:0 3px 10px rgba(0,0,0,.3); }
-    .domino-row.red .dom-slot.filled { color:#e02a3c; }
-    .dom-slot.seven { background:linear-gradient(160deg,#d9b25f,#c39b42); color:#2a1f06; box-shadow:0 4px 14px rgba(217,178,95,.5); }
-    .dom-slot.empty { background:rgba(255,255,255,.05); color:rgba(255,255,255,.25); border:1px dashed rgba(255,255,255,.15); font-size:26px; }
-    .dom-slot.empty7 { background:rgba(217,178,95,.12); color:rgba(217,178,95,.5); border:1px dashed rgba(217,178,95,.4); }
+    /* DOMINO
+       Posizione, colonne e misura della carta (--cw) arrivano da DominoBoard, che misura
+       lo spazio libero del tavolo. --cut: altezza visibile della carta (1.5 = intera). */
+    .domino-area { position:absolute; display:flex; align-items:center; justify-content:center; z-index:2; }
+    .domino-board { display:grid; gap:6px 18px; padding:8px 12px; border-radius:16px;
+      background:rgba(0,0,0,.22); border:1px solid rgba(217,178,95,.22); box-shadow:inset 0 0 30px rgba(0,0,0,.25); }
+    .domino-row { display:flex; align-items:center; gap:8px; transition:opacity .3s; }
+    .domino-row.dom-waiting { opacity:.6; }
+    .ds { font-size:clamp(14px, calc(var(--cw) * .42), 30px); width:22px; text-align:center; flex-shrink:0;
+      color:var(--paper); text-shadow:0 2px 6px rgba(0,0,0,.4); }
+    .domino-row.red .ds { color:#ff8c7a; }
+    .domino-track { display:flex; gap:calc(var(--cw) * .14); }
+    /* posto vuoto: solo un'ombra leggera sul panno, nessun suggerimento */
+    .dom-slot { position:relative; width:var(--cw); height:calc(var(--cw) * var(--cut));
+      border-radius:calc(var(--cw) * .08); background:rgba(0,0,0,.12); }
+    /* mazzo: le carte sotto spuntano di 1.5px ciascuna (al massimo 4) per dare spessore */
+    .dom-card { position:absolute; inset:0; overflow:hidden; border-radius:inherit; background:var(--paper);
+      transform:translate(calc(var(--d) * 1.5px), calc(var(--d) * 1.5px));
+      box-shadow:0 2px 6px rgba(0,0,0,.35), 0 0 0 1px rgba(0,0,0,.15); }
+    .dom-card:last-child { animation:domIn .3s ease both; }
+    .dom-card img { display:block; width:100%; height:calc(var(--cw) * 1.5); pointer-events:none; }
+    /* carta tagliata: un leggero sfumato in fondo fa capire che continua */
+    .domino-board.cut .dom-card::after { content:""; position:absolute; left:0; right:0; bottom:0; height:30%;
+      background:linear-gradient(transparent, rgba(0,0,0,.18)); }
+    .dom-slot.seven .dom-card { box-shadow:0 0 0 2px var(--gold), 0 4px 14px rgba(217,178,95,.45); }
+    @keyframes domIn { from { transform:translateY(-10px) scale(.9); opacity:0; } }
+    /* telefono in verticale: le targhette laterali salgono negli angoli e il tabellone usa tutta la larghezza */
+    @media (max-width:780px) {
+      .ck-table.is-domino .seat.left, .ck-table.is-domino .seat.right { top:7px; bottom:auto; margin-block:0; }
+    }
+    /* schermi bassi: "È IL TUO TURNO" va nell'angolo in basso a destra, il centro resta al tabellone */
+    @media (max-height:560px) {
+      .ck-table.is-domino .your-turn { left:auto; right:10px; bottom:8px; transform:none; z-index:5; }
+      .ck-table.is-domino .seat.bottom { right:auto; left:8px; margin-inline:0; }
+    }
 
     /* offerta rimescolamento (4 estremi) */
     .reshuffle-offer { margin-top:16px; background:rgba(0,0,0,.55); border:1px solid rgba(217,178,95,.5);

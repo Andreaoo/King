@@ -11,6 +11,11 @@ import {
 const BOT_NAMES = ["Bot 1", "Bot 2", "Bot 3", "Bot 4"];
 const DIFF_LABEL = { easy: "Facile", neutral: "Neutro", hard: "Difficile", extreme: "Estremo" };
 
+// Velocità dei tempi di gioco (pause dei bot, raccolta prese, sorteggio).
+// Solo per i test automatici: CK_SPEED=10 gioca 10 volte più in fretta. Di norma 1.
+const SPEED = Number(process.env.CK_SPEED) || 1;
+const T = (ms) => ms / SPEED;
+
 export class GameRoom {
     constructor(code, io) {
         this.code = code;
@@ -228,6 +233,7 @@ export class GameRoom {
         if (!this.teamsValid()) return;          // 2 contro 2 obbligatorio
         this.fillWithBots();
         this.totalScores = [0, 0, 0, 0];
+        this.scoreHistory = [];   // una voce per mano giocata: per il grafico finale
         this.modeIndex = 0;
         this.usedNegatives = []; this.positiveLeft = [3, 3]; this.negativeLeft = [4, 4];
         this.handsPlayed = 0; this.negotiatedKey = null;
@@ -243,7 +249,7 @@ export class GameRoom {
             if (this.gameType === "teams") return this.startNegotiation(this.startSeat);
             this.status = "playing";
             this.startMode();
-        }, 3200);
+        }, T(3200));
     }
 
     /* ================= CONTRATTAZIONE (solo gioco a coppie) =================
@@ -339,7 +345,7 @@ export class GameRoom {
                     this.applyDecision(k, k === "chosenTrump" ? SUITS[Math.floor(Math.random() * 4)] : null);
                 }
             }
-        }, 1600 + Math.random() * 500);
+        }, T(1600 + Math.random() * 500));
     }
 
     startMode() {
@@ -402,7 +408,7 @@ export class GameRoom {
                 this._reshuffleCount = (this._reshuffleCount || 0) + 1;
                 this.message = `${this.players[botReshuffle].name} ha 4 estremi: rimescola`;
                 this.emit();
-                setTimeout(() => this.startMode(), 1200);
+                setTimeout(() => this.startMode(), T(1200));
                 return;
             }
             this._reshuffleCount = 0;
@@ -473,8 +479,8 @@ export class GameRoom {
                 this.collecting = winner;   // il client illumina il vincitore e anima le carte
                 this.collectingPts = pts;   // punti incassati in questa presa
                 this.emit();
-            }, 700);
-            setTimeout(() => this.resolveCurrentTrick(), 1600);
+            }, T(700));
+            setTimeout(() => this.resolveCurrentTrick(), T(1600));
         }
     }
 
@@ -593,6 +599,7 @@ export class GameRoom {
     // -------- fine mano / partita --------
     finishMode() {
         this.totalScores = this.totalScores.map((v, i) => v + this.handScores[i]);
+        this.scoreHistory.push({ key: this.modeKey, title: this.mode.title, scores: [...this.handScores] });
         this.status = "modeEnd";
         clearTimeout(this.botTimer);
         this.emit();
@@ -652,7 +659,7 @@ export class GameRoom {
             this.playCard(p.id, card.id);
             // pausa con una piccola variazione: a intervalli identici i bot
             // sembrano un metronomo invece che giocatori
-        }, 1400 + Math.random() * 350);
+        }, T(1400 + Math.random() * 350));
     }
 
     // Watchdog anti-stallo: rilancia il driver SOLO se il turno è di un bot fermo
@@ -719,6 +726,7 @@ export class GameRoom {
             trickNumber: this.trickNumber,
             handScores: this.handScores,
             totalScores: this.totalScores,
+            scoreHistory: this.scoreHistory || [],
             tricksWon: this.tricksWon,
             awaitingTrump: this.awaitingTrump,
             blindBy: this.blindBy,              // chi gioca al buio

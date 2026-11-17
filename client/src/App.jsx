@@ -1,6 +1,7 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { io } from "socket.io-client";
 import Chat from "./chat/Chat.jsx";
+import ScoreChart from "./ScoreChart.jsx";
 
 // In produzione il client è servito dallo stesso server Node → stesso origin.
 // In sviluppo punta al server locale su :3001 (override con VITE_SERVER_URL).
@@ -1010,7 +1011,7 @@ function EndScreen({ s, isOwner, onNext, onLeave }) {
       </div>
     );
     return (
-      <div className="endscreen">
+      <div className={`endscreen ${isOver ? "over" : ""}`}>
         {isOver ? <div className="trophy">🏆</div> : <div className="me-tag">{s.modeShort}</div>}
         <h2>{isOver ? "Partita finita" : "Fine mano"}</h2>
         <div className="crown">{vinc(isOver ? bt : bm, isOver ? rt : rm)}</div>
@@ -1020,6 +1021,7 @@ function EndScreen({ s, isOwner, onNext, onLeave }) {
           {card(1, "rossa", "🔴 ROSSA", isOver ? rt : rm,
             !isOver && membri(1).map((x) => `${x.p.name} ${s.handScores[x.i] > 0 ? "+" : ""}${s.handScores[x.i]}`).join(" · "))}
         </div>
+        {isOver && <ScoreChart history={s.scoreHistory || []} players={s.players} teams={s.teams} gameType={s.gameType} />}
         {!isOver && (
           <>
             <div className="side-title">Totale partita</div>
@@ -1050,7 +1052,7 @@ function EndScreen({ s, isOwner, onNext, onLeave }) {
   const ranked = s.players.map((p, i) => ({ ...p, score: s.totalScores[i] })).sort((a, b) => b.score - a.score);
   const medals = ["🥇", "🥈", "🥉", "  "];
   return (
-    <div className="endscreen">
+    <div className={`endscreen ${isOver ? "over" : ""}`}>
       {isOver ? (
         <>
           <div className="trophy">🏆</div>
@@ -1065,6 +1067,7 @@ function EndScreen({ s, isOwner, onNext, onLeave }) {
               </li>
             ))}
           </ol>
+          <ScoreChart history={s.scoreHistory || []} players={s.players} gameType={s.gameType} />
           <button className="btn primary wide" onClick={onLeave}>TORNA AL MENU</button>
         </>
       ) : (
@@ -1873,6 +1876,9 @@ function Style() {
     @keyframes wonPulse { to { box-shadow:0 0 55px rgba(217,178,95,.9); } }
 
     /* MODE END + GAME OVER */
+    /* a fine partita il riquadro si allarga per fare spazio al grafico */
+    .endscreen.over { width:min(780px,96vw); margin:24px auto; padding:26px clamp(14px,4vw,30px) 24px; text-align:center;
+      background:rgba(0,0,0,.25); border:1px solid rgba(217,178,95,.3); border-radius:18px; }
     .modeend, .gameover { background:rgba(0,0,0,.25); border:1px solid rgba(217,178,95,.3);
       border-radius:18px; padding:28px; width:min(460px,92vw); text-align:center; }
     .me-tag { font-size:11px; letter-spacing:.2em; color:var(--gold); }

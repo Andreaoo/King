@@ -676,7 +676,9 @@ export class GameRoom {
         return {
             code: this.code,
             status: this.status,
-            ownerId: this.ownerId,
+            // solo "sei tu il proprietario?": il pid del proprietario non deve arrivare agli altri,
+            // altrimenti chiunque potrebbe rientrare con quel pid e prenderne il posto
+            isOwner: playerId === this.ownerId,
             youSeat: seat,
             difficulty: this.difficulty,
             // ---- gioco a coppie ----

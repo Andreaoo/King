@@ -67,6 +67,25 @@ Si apre a schermo intero con icona e nome “Cart King”. L'installazione è op
 - `CLIENT_ORIGIN` — opzionale: limita il CORS a un dominio. Se assente accetta tutti.
 - `VITE_SERVER_URL` — solo se tieni frontend e backend **separati** (vedi `client/.env.example`).
   Con il deploy consigliato (un unico servizio) **non serve impostare nulla**.
+- `CHAT_MAX_FILE_MB` — dimensione massima di ogni allegato in chat (predefinito 20).
+- `CHAT_ROOM_QUOTA_MB` — spazio totale per gli allegati di una stanza (predefinito 200).
+- `GIPHY_API_KEY` — opzionale: attiva la ricerca di GIF online. Senza chiave si possono
+  comunque inviare GIF dal proprio dispositivo.
+
+---
+
+## Chat
+Pulsante dorato in basso a destra (si trascina dove si vuole), presente dalla lobby a fine partita.
+Chat del tavolo e privati 1-a-1, allegati (PNG, JPG, WEBP, GIF, PDF, DOCX, XLSX, TXT), emoji,
+GIF, risposte, reazioni, "sta scrivendo", notifiche. Tre modalità: laterale, metà schermo,
+schermo intero; il bordo sinistro si trascina per ridimensionare.
+
+- Codice: `server/src/chat.js` (messaggi e permessi), `server/src/chatFiles.js` (allegati),
+  `client/src/chat/` (interfaccia). Usa lo stesso Socket.IO del gioco.
+- I messaggi e i file vivono in memoria / in una cartella temporanea del server e spariscono
+  quando la stanza si chiude o il server si riavvia (come le partite).
+- Il server decide sempre chi è il mittente; i privati e i loro allegati li vedono solo i due
+  interessati; il tipo dei file si controlla sul contenuto, non solo sull'estensione.
 
 ---
 

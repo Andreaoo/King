@@ -1,5 +1,6 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { io } from "socket.io-client";
+import Chat from "./chat/Chat.jsx";
 
 // In produzione il client è servito dallo stesso server Node → stesso origin.
 // In sviluppo punta al server locale su :3001 (override con VITE_SERVER_URL).
@@ -133,13 +134,18 @@ export default function App() {
   }
 
   const connBanner = <ConnBanner status={connStatus} />;
+  // chat della stanza: montata in tutte le schermate della stanza (lobby → fine partita),
+  // vive per conto suo e non fa ridisegnare il gioco quando arriva un messaggio
+  const chatEl = view !== "home" && view !== "join" && state?.code
+    ? <Chat key={state.code} socket={socketRef.current} serverUrl={SERVER_URL} />
+    : null;
 
   if (connStatus === "connecting" && !state)
-    return <Shell notice={notice} onCloseNotice={() => setNotice(null)}>{connBanner}<Connecting /></Shell>;
+    return <Shell notice={notice} onCloseNotice={() => setNotice(null)} chat={chatEl}>{connBanner}<Connecting /></Shell>;
 
   if (view === "home" || view === "join")
     return (
-      <Shell notice={notice} onCloseNotice={() => setNotice(null)}>
+      <Shell notice={notice} onCloseNotice={() => setNotice(null)} chat={chatEl}>
         {connBanner}
         <Home
           view={view} setView={setView} name={name} setName={setName}
@@ -152,11 +158,11 @@ export default function App() {
       </Shell>
     );
 
-  if (!state) return <Shell notice={notice} onCloseNotice={() => setNotice(null)}>{connBanner}<div className="ck-center-msg">Caricamento…</div></Shell>;
+  if (!state) return <Shell notice={notice} onCloseNotice={() => setNotice(null)} chat={chatEl}>{connBanner}<div className="ck-center-msg">Caricamento…</div></Shell>;
 
   if (state.status === "closed" && state.closedByMaster)
     return (
-      <Shell notice={notice} onCloseNotice={() => setNotice(null)}>
+      <Shell notice={notice} onCloseNotice={() => setNotice(null)} chat={chatEl}>
         {connBanner}
         <div className="closed-screen">
           <div className="closed-icon">🚪</div>
@@ -169,7 +175,7 @@ export default function App() {
 
   if (state.status === "lobby")
     return (
-      <Shell notice={notice} onCloseNotice={() => setNotice(null)}>
+      <Shell notice={notice} onCloseNotice={() => setNotice(null)} chat={chatEl}>
         {connBanner}
         <Lobby
           state={state} pid={pid}
@@ -183,7 +189,7 @@ export default function App() {
 
   if (state.status === "choosing")
     return (
-      <Shell notice={notice} onCloseNotice={() => setNotice(null)}>
+      <Shell notice={notice} onCloseNotice={() => setNotice(null)} chat={chatEl}>
         {connBanner}
         <ModeChoice
           s={state}
@@ -195,14 +201,14 @@ export default function App() {
 
   if (state.status === "draw")
     return (
-      <Shell notice={notice} onCloseNotice={() => setNotice(null)}>
+      <Shell notice={notice} onCloseNotice={() => setNotice(null)} chat={chatEl}>
         {connBanner}
         <DrawScreen state={state} />
       </Shell>
     );
 
   return (
-    <Shell notice={notice} onCloseNotice={() => setNotice(null)}>
+    <Shell notice={notice} onCloseNotice={() => setNotice(null)} chat={chatEl}>
       {connBanner}
       <Game
         state={state} pid={pid} guardedAct={guardedAct}
@@ -465,7 +471,7 @@ function TeamsBox({ state, pid, onSetTeam }) {
 }
 
 function Lobby({ state, pid, onStart, onConfig, onSetTeam, onLeave }) {
-  const isOwner = state.ownerId === pid;
+  const isOwner = state.isOwner;
   const humans = state.players.filter((p) => !p.bot).length;
   const [copied, setCopied] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -759,7 +765,7 @@ function Game({ state: s, pid, guardedAct, onPlay, onTrump, onBlind, onPass, onN
   const [showSidebar, setShowSidebar] = useState(false);
   const seat = s.youSeat;
   const myTurn = s.turn === seat;
-  const isOwner = s.ownerId === pid;
+  const isOwner = s.isOwner;
 
   const seatOf = (i) => LAYOUT[(i - seat + 4) % 4]; // ruota così che "tu" sia sempre in basso
 
@@ -1278,11 +1284,12 @@ function DominoBoard({ board }) {
 }
 
 /* ---------------- SHELL + STYLE ---------------- */
-function Shell({ children, notice, onCloseNotice }) {
+function Shell({ children, notice, onCloseNotice, chat }) {
   return (
     <div className="ck-root">
       <Style />
       {children}
+      {chat}
       {notice && (
         <div className="notice-overlay" onClick={onCloseNotice}>
           <div className="notice-box" onClick={(e) => e.stopPropagation()}>

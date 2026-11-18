@@ -250,7 +250,7 @@ export default function App() {
     : null;
 
   if (connStatus === "connecting" && !state)
-    return <Shell notice={notice} onCloseNotice={() => setNotice(null)} chat={chatEl}>{connBanner}<Connecting /></Shell>;
+    return <Shell notice={notice} onCloseNotice={() => setNotice(null)} chat={chatEl}>{connBanner}<div className="page-center"><Connecting /></div></Shell>;
 
   if (view === "home" || view === "join")
     return (
@@ -267,7 +267,7 @@ export default function App() {
       </Shell>
     );
 
-  if (!state) return <Shell notice={notice} onCloseNotice={() => setNotice(null)} chat={chatEl}>{connBanner}<div className="ck-center-msg">Caricamento…</div></Shell>;
+  if (!state) return <Shell notice={notice} onCloseNotice={() => setNotice(null)} chat={chatEl}>{connBanner}<div className="page-center ck-center-msg">Caricamento…</div></Shell>;
 
   if (state.status === "closed" && state.closedByMaster)
     return (
@@ -347,6 +347,7 @@ function DrawScreen({ state }) {
     return () => clearInterval(iv);
   }, []); // eslint-disable-line
   return (
+    <div className="page-center">
     <div className="draw-box">
       <h2 className="draw-title">Chi inizia?</h2>
       <p className="draw-sub">{done ? `Inizia ${state.players[winner]?.name}!` : "Sorteggio in corso…"}</p>
@@ -358,6 +359,7 @@ function DrawScreen({ state }) {
           </div>
         ))}
       </div>
+    </div>
     </div>
   );
 }
@@ -1133,6 +1135,7 @@ function EndScreen({ s, isOwner, onNext, onLeave }) {
       </div>
     );
     return (
+      <div className="page-center">
       <div className={`endscreen ${isOver ? "over" : ""}`}>
         {isOver ? <div className="trophy">🏆</div> : <div className="me-tag">{s.modeShort}</div>}
         <h2>{isOver ? "Partita finita" : "Fine mano"}</h2>
@@ -1168,12 +1171,14 @@ function EndScreen({ s, isOwner, onNext, onLeave }) {
         ) : <div className="waiting">In attesa del proprietario…</div>}
         {!isOver && <button className="btn ghost wide" style={{ marginTop: 10 }} onClick={onLeave}>Esci</button>}
       </div>
+      </div>
     );
   }
 
   const ranked = s.players.map((p, i) => ({ ...p, score: s.totalScores[i] })).sort((a, b) => b.score - a.score);
   const medals = ["🥇", "🥈", "🥉", "  "];
   return (
+    <div className="page-center">
     <div className={`endscreen ${isOver ? "over" : ""}`}>
       {isOver ? (
         <>
@@ -1218,6 +1223,7 @@ function EndScreen({ s, isOwner, onNext, onLeave }) {
           <button className="btn ghost wide" style={{ marginTop: 10 }} onClick={onLeave}>Esci</button>
         </>
       )}
+    </div>
     </div>
   );
 }
@@ -1585,7 +1591,7 @@ function Style() {
     .mc-hand { flex:none; text-align:center; padding:6px calc(6px + var(--sar)) calc(8px + var(--sab)) calc(6px + var(--sal));
       background:linear-gradient(180deg,rgba(0,0,0,0),rgba(0,0,0,.25)); border-top:1px solid rgba(217,178,95,.2); }
     .mc-hand .ck-card { cursor:default; }
-    .mode-pane { width:min(460px,94vw); margin:0 auto; padding:14px 4px calc(20px + var(--sab));
+    .mode-pane { width:min(460px,94vw); margin:0 auto; padding:calc(14px + var(--sat)) 4px calc(20px + var(--sab));
       overflow-y:auto; max-height:100dvh; }
     .mc-title { font-family:'Cormorant Garamond',serif; font-size:30px; color:var(--gold);
       text-align:center; margin:8px 0 2px; }
@@ -1634,7 +1640,7 @@ function Style() {
 
     /* LOBBY */
     /* la lobby sta al centro dello schermo, lontana da notch, barra di stato e bordi arrotondati */
-    .lobby-page { min-height:100dvh; display:flex; align-items:center; justify-content:center;
+    .lobby-page, .page-center { min-height:100dvh; display:flex; align-items:center; justify-content:center;
       /* in basso resta lo spazio per il pulsante della chat, che non deve coprire AVVIA PARTITA */
       padding:calc(16px + var(--sat)) calc(16px + var(--sar)) calc(86px + var(--sab)) calc(16px + var(--sal)); }
     .lobby { background:rgba(0,0,0,.22); border:1px solid rgba(217,178,95,.3); border-radius:18px;
@@ -1989,7 +1995,7 @@ function Style() {
 
     /* SORTEGGIO INIZIALE */
     .draw-box { background:rgba(0,0,0,.28); border:1px solid rgba(217,178,95,.35); border-radius:20px;
-      padding:32px 28px; width:min(460px,94vw); text-align:center; }
+      padding:clamp(20px,6vw,32px) clamp(16px,5vw,28px); width:min(460px,100%); text-align:center; }
     .draw-title { font-family:'Cormorant Garamond',serif; font-size:38px; color:var(--gold); margin:0 0 4px; }
     .draw-sub { color:#cde; font-size:15px; margin-bottom:24px; min-height:22px; }
     .draw-slots { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
@@ -2006,7 +2012,11 @@ function Style() {
 
     /* MODE END + GAME OVER */
     /* a fine partita il riquadro si allarga per fare spazio al grafico */
-    .endscreen.over { width:min(780px,96vw); margin:24px auto; padding:26px clamp(14px,4vw,30px) 24px; text-align:center;
+    /* fine mano: riquadro centrato come la lobby */
+    .endscreen { width:min(520px,100%); text-align:center; padding:clamp(16px,5vw,26px); border-radius:18px;
+      background:rgba(0,0,0,.22); border:1px solid rgba(217,178,95,.3); }
+    .endscreen .me-table + .btn, .endscreen .me-table + .waiting { margin-top:16px; }
+    .endscreen.over { width:min(780px,100%); margin:0 auto; padding:26px clamp(14px,4vw,30px) 24px; text-align:center;
       background:rgba(0,0,0,.25); border:1px solid rgba(217,178,95,.3); border-radius:18px; }
     .modeend, .gameover { background:rgba(0,0,0,.25); border:1px solid rgba(217,178,95,.3);
       border-radius:18px; padding:28px; width:min(460px,92vw); text-align:center; }

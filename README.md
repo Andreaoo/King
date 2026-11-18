@@ -95,6 +95,8 @@ Da telefono serve HTTPS (sull'IP di casa il service worker non parte): usa il de
   Con il deploy consigliato (un unico servizio) **non serve impostare nulla**.
 - `CHAT_MAX_FILE_MB` — dimensione massima di ogni allegato in chat (predefinito 20).
 - `CHAT_ROOM_QUOTA_MB` — spazio totale per gli allegati di una stanza (predefinito 200).
+- `PUBLIC_URL` — opzionale: indirizzo pubblico (es. `https://king.onrender.com`) usato nell'anteprima dei link;
+  se assente si ricava da solo dalla richiesta.
 - `RECONNECT_GRACE_S` — secondi in cui il posto resta a chi è caduto (predefinito 90).
 - `PING_INTERVAL_S` / `PING_TIMEOUT_S` — battito e tolleranza della connessione (predefiniti 10 e 20).
 - `GIPHY_API_KEY` — opzionale: attiva la ricerca di GIF online. Senza chiave si possono

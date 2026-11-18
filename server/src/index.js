@@ -29,6 +29,18 @@ const MIME = {
     ".svg": "image/svg+xml", ".ico": "image/x-icon", ".woff2": "font/woff2", ".txt": "text/plain",
 };
 
+// Indirizzo pubblico del sito (per og:image ecc.). PUBLIC_URL lo fissa; altrimenti lo si
+// ricava dalla richiesta (dietro Render/proxy arriva x-forwarded-proto = https).
+function publicOrigin(req) {
+    const fixed = (process.env.PUBLIC_URL || "").trim().replace(/\/+$/, "");
+    if (/^https?:\/\/[a-z0-9.-]+(:\d+)?$/i.test(fixed)) return fixed;
+    const first = (v) => String(v || "").split(",")[0].trim();
+    const proto = first(req.headers["x-forwarded-proto"]) === "https" ? "https" : (req.socket.encrypted ? "https" : "http");
+    let host = first(req.headers["x-forwarded-host"]) || first(req.headers.host);
+    if (!/^[a-z0-9.-]+(:\d+)?$/i.test(host)) host = "localhost";   // niente valori strani nella pagina
+    return `${proto}://${host}`;
+}
+
 // Cache HTTP: la pagina e il service worker vanno sempre ricontrollati (così gli
 // aggiornamenti arrivano subito); i file con l'hash nel nome non cambiano mai.
 function cacheHeader(urlPath, filePath) {
@@ -107,7 +119,9 @@ const httpServer = createServer(async (req, res) => {
         if (urlPath === "/" || !existsSync(filePath) || !extname(filePath)) {
             filePath = join(DIST, "index.html");
         }
-        const data = await readFile(filePath);
+        let data = await readFile(filePath);
+        // anteprima dei link: le immagini og/twitter devono avere un indirizzo assoluto
+        if (filePath.endsWith("index.html")) data = Buffer.from(data.toString("utf8").replaceAll("__ORIGIN__", publicOrigin(req)));
         res.writeHead(200, {
             "Content-Type": MIME[extname(filePath)] || "application/octet-stream",
             "Cache-Control": cacheHeader(urlPath, filePath),

@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no" />
     <title>King</title>
-    <meta name="description" content="King (Barbu) multiplayer - 13 mani - gioca online con gli amici dal telefono." />
+    <meta name="description" content="Il gioco di carte King (Barbu) in multiplayer: 13 mani, sfida gli amici online dal telefono." />
 
     <!-- PWA -->
     <link rel="manifest" href="/manifest.webmanifest" />
@@ -13,7 +13,9 @@
     <meta name="color-scheme" content="dark" />
     <meta name="format-detection" content="telephone=no" />
     <meta name="mobile-web-app-capable" content="yes" />
-    <link rel="icon" type="image/png" sizes="48x48" href="/icons/icon-48.png" />
+    <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/icons/favicon-16.png" />
     <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png" />
 
     <!-- iOS: icone, schermo intero e schermate di avvio -->
@@ -54,10 +56,24 @@
     <link rel="apple-touch-startup-image" href="/splash/splash-2048x2732.jpg" media="(device-width: 1024px) and (device-height: 1366px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)" />
     <link rel="apple-touch-startup-image" href="/splash/splash-2732x2048.jpg" media="(device-width: 1024px) and (device-height: 1366px) and (-webkit-device-pixel-ratio: 2) and (orientation: landscape)" />
 
+    <!-- anteprima dei link (WhatsApp, Telegram, Facebook, X). __ORIGIN__ viene sostituito
+         dal server con l'indirizzo pubblico (es. https://king.onrender.com): i link devono essere assoluti -->
+    <meta property="og:site_name" content="King" />
     <meta property="og:title" content="King" />
-    <meta property="og:description" content="Vieni a giocare a King online!" />
+    <meta property="og:description" content="Il gioco di carte King (Barbu) in multiplayer: 13 mani, sfida gli amici online dal telefono." />
     <meta property="og:type" content="website" />
-    <meta property="og:image" content="/cover.jpg" />
+    <meta property="og:url" content="__ORIGIN__/" />
+    <meta property="og:image" content="__ORIGIN__/og-king.jpg" />
+    <meta property="og:image:secure_url" content="__ORIGIN__/og-king.jpg" />
+    <meta property="og:image:type" content="image/jpeg" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="King: corona dorata e quattro Re su panno verde" />
+    <meta property="og:locale" content="it_IT" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="King" />
+    <meta name="twitter:description" content="Il gioco di carte King (Barbu) in multiplayer: 13 mani, sfida gli amici online dal telefono." />
+    <meta name="twitter:image" content="__ORIGIN__/og-king.jpg" />
     <style>html,body{background:#0a3d26;margin:0}</style>
   </head>
   <body>

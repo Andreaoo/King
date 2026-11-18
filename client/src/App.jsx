@@ -585,8 +585,8 @@ function TeamsBox({ state, pid, onSetTeam }) {
       <div className={`valid-note ${ok ? "ok" : "bad"}`}>
         {ok ? "✓ Squadre valide — 2 contro 2" : `✗ Servono 2 contro 2 (ora ${nb} blu / ${nr} rossi)`}
       </div>
-      <p className="lobby-hint">Tocca un posto per spostarlo nell\'altra squadra.
-        I posti liberi diventano bot all\'avvio.</p>
+      <p className="lobby-hint">Tocca un posto per spostarlo nell’altra squadra.
+        I posti liberi diventano bot all’avvio.</p>
     </>
   );
 }
@@ -642,6 +642,7 @@ function Lobby({ state, pid, onStart, onConfig, onSetTeam, onLeave }) {
   }
 
   return (
+    <div className="lobby-page">
     <div className="lobby">
       <button className="link-back" onClick={onLeave}>← Esci</button>
       <div className="room-code"><span>STANZA</span><b>{state.code}</b></div>
@@ -707,6 +708,7 @@ function Lobby({ state, pid, onStart, onConfig, onSetTeam, onLeave }) {
           </div>
         </div>
       )}
+    </div>
     </div>
   );
 }
@@ -1631,8 +1633,15 @@ function Style() {
     @media (max-width:780px) { .mc-title { font-size:24px; } }
 
     /* LOBBY */
+    /* la lobby sta al centro dello schermo, lontana da notch, barra di stato e bordi arrotondati */
+    .lobby-page { min-height:100dvh; display:flex; align-items:center; justify-content:center;
+      /* in basso resta lo spazio per il pulsante della chat, che non deve coprire AVVIA PARTITA */
+      padding:calc(16px + var(--sat)) calc(16px + var(--sar)) calc(86px + var(--sab)) calc(16px + var(--sal)); }
     .lobby { background:rgba(0,0,0,.22); border:1px solid rgba(217,178,95,.3); border-radius:18px;
-      padding:26px; width:min(420px,92vw); }
+      padding:clamp(16px,5vw,26px); width:min(420px,100%); }
+    .btn.share { display:block; width:100%; margin-bottom:10px; -webkit-appearance:none; appearance:none;
+      background:rgba(217,178,95,.14); border:1px solid rgba(217,178,95,.5); color:var(--gold); }
+    .link-back { -webkit-appearance:none; appearance:none; padding:4px 0; font-size:15px; }
     .link-back { background:none; border:none; color:#cfe; margin-bottom:10px; }
     .room-code { text-align:center; margin-bottom:18px; }
     .room-code span { display:block; font-size:12px; letter-spacing:.3em; color:#bcd; }

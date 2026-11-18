@@ -4,7 +4,7 @@
 //  - stato di gioco, sessione e token restano in memoria/localStorage, mai qui;
 //  - pagina: prima la rete (così arrivano gli aggiornamenti), la copia in cache serve solo offline;
 //  - file con l'hash nel nome (/assets/…), carte, icone e font: dalla cache, sono immutabili.
-const VERSION = "king-v6";
+const VERSION = "king-v7";
 const SHELL = `${VERSION}-shell`;     // pagina, manifest, icone, carte
 const ASSETS = `${VERSION}-assets`;   // JS/CSS buildati e font
 const MAX_ASSETS = 40;

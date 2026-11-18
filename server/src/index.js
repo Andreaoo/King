@@ -46,6 +46,8 @@ function publicOrigin(req) {
 function cacheHeader(urlPath, filePath) {
     if (urlPath.startsWith("/assets/")) return "public, max-age=31536000, immutable";
     if (filePath.endsWith("index.html") || urlPath === "/sw.js" || urlPath.endsWith(".webmanifest")) return "no-cache";
+    // icone che Safari chiede da solo, senza versione nell'indirizzo: sempre ricontrollate
+    if (["/apple-touch-icon.png", "/apple-touch-icon-precomposed.png", "/favicon.ico", "/favicon.png"].includes(urlPath)) return "no-cache";
     return "public, max-age=86400";                     // carte, icone, schermate di avvio
 }
 

@@ -38,6 +38,25 @@ function usePlayerId() {
   }, []);
 }
 
+// sessione di gioco: stanza + token segreto dato dal server. In localStorage così
+// sopravvive a ricarica, chiusura della scheda e browser sospeso dal sistema.
+const SESSION_KEY = "ck_session";
+const SESSION_TTL = 12 * 3600 * 1000;
+function readSession() {
+  try {
+    const s = JSON.parse(localStorage.getItem(SESSION_KEY) || "null");
+    if (s && s.room && s.token && Date.now() - (s.t || 0) < SESSION_TTL) return s;
+  } catch { /* storage non disponibile */ }
+  return null;
+}
+function saveSession(room, token) {
+  if (!room || !token) return;
+  try { localStorage.setItem(SESSION_KEY, JSON.stringify({ room, token, t: Date.now() })); } catch { /* ignora */ }
+}
+function clearSession() {
+  try { localStorage.removeItem(SESSION_KEY); sessionStorage.removeItem("ck_room"); } catch { /* ignora */ }
+}
+
 // legge un eventuale codice stanza dall'URL: /room/K7P2  oppure  ?room=K7P2
 function readRoomFromUrl() {
   const m = window.location.pathname.match(/\/room\/([A-Za-z0-9]{4})/);
@@ -49,7 +68,9 @@ function readRoomFromUrl() {
 export default function App() {
   const pid = usePlayerId();
   const socketRef = useRef(null);
-  const [connStatus, setConnStatus] = useState("connecting"); // connecting | online | lost
+  const [connStatus, setConnStatus] = useState("connecting"); // connecting | online | reconnecting | lost | restored
+  const [replaced, setReplaced] = useState(false);            // partita ripresa in un'altra scheda
+  const replacedRef = useRef(false);
   const [view, setView] = useState("home"); // home | join | lobby | game
   const [state, setState] = useState(null);
   const [name, setName] = useState(localStorage.getItem("ck_name") || "");
@@ -66,25 +87,60 @@ export default function App() {
     const socket = io(SERVER_URL, {
       transports: ["websocket", "polling"], // websocket preferito, polling se il websocket è bloccato
       reconnection: true,
-      reconnectionDelay: 800,        // primo tentativo dopo 0.8s
-      reconnectionDelayMax: 5000,    // fino a 5s tra i tentativi
+      reconnectionDelay: 1000,       // backoff esponenziale: 1s, 2s, 4s… (con un po' di casualità)
+      reconnectionDelayMax: 8000,    // al massimo 8s tra un tentativo e l'altro
       reconnectionAttempts: Infinity, // continua a riprovare (utile su mobile che va e viene)
       timeout: 20000,
+      // ad ogni (ri)connessione il server riceve la sessione e rimette subito il giocatore al suo posto
+      auth: (cb) => {
+        const ss = readSession();
+        cb(ss ? { room: ss.room, token: ss.token, pid } : {});
+      },
     });
     socketRef.current = socket;
+    let everConnected = false, lostTimer = null, restoredTimer = null, shown = "connecting";
+    const setStatus = (st) => {
+      clearTimeout(lostTimer); clearTimeout(restoredTimer);
+      shown = st; setConnStatus(st);
+      if (st === "reconnecting") lostTimer = setTimeout(() => { shown = "lost"; setConnStatus("lost"); }, 6000);
+      if (st === "restored") restoredTimer = setTimeout(() => { shown = "online"; setConnStatus("online"); }, 2500);
+    };
     socket.on("connect", () => {
-      setConnStatus("online");
-      // riconnessione automatica: se ero in una stanza, rientro con lo stesso pid
-      const lastRoom = sessionStorage.getItem("ck_room");
-      if (lastRoom) {
-        socket.emit("joinRoom", { code: lastRoom, name: name || localStorage.getItem("ck_name") || "Giocatore", pid }, () => {});
-      }
+      lastActionKey.current = null;     // dopo una ripresa si può rifare la mossa che non era partita
+      replacedRef.current = false;
+      setReplaced(false);
+      setStatus(everConnected ? "restored" : "online");
+      everConnected = true;
     });
-    socket.on("disconnect", () => setConnStatus("lost"));
-    socket.io.on("reconnect_attempt", () => setConnStatus("connecting"));
+    socket.on("disconnect", (reason) => {
+      if (replacedRef.current) return;
+      setStatus(navigator.onLine === false ? "lost" : "reconnecting");
+      // chiusura decisa dal server: Socket.IO non ritenta da solo, lo facciamo noi
+      if (reason === "io server disconnect") setTimeout(() => !replacedRef.current && socket.connect(), 1000);
+    });
+    // la stessa sessione è stata aperta in un'altra scheda/dispositivo: qui ci si ferma
+    socket.on("session:replaced", () => { replacedRef.current = true; setReplaced(true); });
+    // sessione non più valida (stanza chiusa o posto assegnato a un bot): si torna alla home
+    socket.on("session:invalid", ({ room } = {}) => {
+      const ss = readSession();
+      if (ss && ss.room === room) clearSession();
+      setState((cur) => {
+        if (cur && cur.code === room) {
+          setView("home");
+          setError("La partita non è più disponibile.");
+          window.history.replaceState(null, "", "/");
+          return null;
+        }
+        return cur;
+      });
+    });
     socket.on("state", (s) => {
       setState(s);
-      sessionStorage.setItem("ck_room", s.code);
+      if (s.status === "closed") clearSession();
+      else {
+        const ss = readSession();     // tiene fresca la scadenza della sessione mentre si gioca
+        if (ss && ss.room === s.code && Date.now() - ss.t > 60000) saveSession(ss.room, ss.token);
+      }
       // mostra l'avviso centrale solo quando è nuovo (evita ripetizioni ad ogni update)
       if (s.notice && s.notice !== lastNotice.current) {
         lastNotice.current = s.notice;
@@ -93,7 +149,51 @@ export default function App() {
       if (s.status === "lobby") setView("lobby");
       else if (s.status !== "closed") setView("game");
     });
-    return () => socket.disconnect();
+    // Ritorno in primo piano (WhatsApp, schermo bloccato, cambio rete): i timer in background
+    // possono essere stati sospesi, quindi non ci si fida dello stato del socket: si verifica.
+    let lastCheck = 0;
+    const check = (force) => {
+      if (replacedRef.current || (force !== true && document.visibilityState === "hidden")) return;
+      const now = Date.now();
+      if (force !== true && now - lastCheck < 1500) return;        // focus + visibility + pageshow arrivano insieme
+      lastCheck = now;
+      if (!socket.connected) {
+        // riparte subito, senza aspettare il prossimo tentativo del backoff
+        socket.disconnect(); socket.connect();
+        return;
+      }
+      // connesso "sulla carta": il canale potrebbe essere morto mentre il telefono dormiva
+      socket.timeout(4000).emit("ck:ping", (err, res) => {
+        if (err) { setStatus("reconnecting"); socket.io.engine?.close(); return; }  // forza la riconnessione
+        // il canale era vivo (rete tornata prima che cadesse): via l'avviso
+        if (shown === "lost" || shown === "reconnecting") setStatus("restored");
+        const ss = readSession();
+        if (res && !res.inRoom && ss) {
+          socket.emit("resumeSession", { room: ss.room, token: ss.token, pid }, (r) => {
+            if (r && !r.ok) socket.listeners("session:invalid").forEach((f) => f({ room: ss.room }));
+          });
+        }
+      });
+    };
+    const onVisible = () => { if (document.visibilityState === "visible") check(); };
+    const onOnline = () => check(true);     // la rete è appena tornata: si verifica sempre
+    const onOffline = () => { if (!replacedRef.current) setStatus("lost"); };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", check);
+    window.addEventListener("pageshow", check);
+    window.addEventListener("online", onOnline);
+    window.addEventListener("offline", onOffline);
+    // pagehide/blur: volutamente NESSUNA disconnessione, il posto resta al giocatore
+
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", check);
+      window.removeEventListener("pageshow", check);
+      window.removeEventListener("online", onOnline);
+      window.removeEventListener("offline", onOffline);
+      clearTimeout(lostTimer); clearTimeout(restoredTimer);
+      socket.disconnect();
+    };
   }, []); // eslint-disable-line
 
   // se apro un link /room/CODICE, vai direttamente alla schermata "entra"
@@ -107,20 +207,27 @@ export default function App() {
     localStorage.setItem("ck_name", name);
     emit("createRoom", { name: name || "Giocatore", difficulty, gameType, pid }, (res) => {
       if (!res?.ok) setError(res?.error || "Errore");
-      else if (res.code) window.history.replaceState(null, "", `/room/${res.code}`);
+      else if (res.code) {
+        saveSession(res.code, res.token);
+        window.history.replaceState(null, "", `/room/${res.code}`);
+      }
     });
   }
   function joinRoom() {
     localStorage.setItem("ck_name", name);
     const code = joinCode.toUpperCase();
-    emit("joinRoom", { code, name: name || "Giocatore", pid }, (res) => {
+    const ss = readSession();
+    emit("joinRoom", { code, name: name || "Giocatore", pid, token: ss && ss.room === code ? ss.token : undefined }, (res) => {
       if (!res?.ok) setError(res?.error || "Errore");
-      else window.history.replaceState(null, "", `/room/${code}`);
+      else {
+        saveSession(res.code, res.token);
+        window.history.replaceState(null, "", `/room/${code}`);
+      }
     });
   }
   function leaveRoom() {
     emit("leaveRoom");
-    sessionStorage.removeItem("ck_room");
+    clearSession();
     window.history.replaceState(null, "", "/");
     setView("home"); setState(null); setError("");
   }
@@ -134,7 +241,8 @@ export default function App() {
     fn();
   }
 
-  const connBanner = <ConnBanner status={connStatus} />;
+  const connBanner = <ConnBanner status={connStatus} replaced={replaced}
+    onTakeBack={() => { replacedRef.current = false; setReplaced(false); socketRef.current?.connect(); }} />;
   // chat della stanza: montata in tutte le schermate della stanza (lobby → fine partita),
   // vive per conto suo e non fa ridisegnare il gioco quando arriva un messaggio
   const chatEl = view !== "home" && view !== "join" && state?.code
@@ -255,12 +363,22 @@ function DrawScreen({ state }) {
 }
 
 /* ---------------- BANNER CONNESSIONE ---------------- */
-function ConnBanner({ status }) {
+function ConnBanner({ status, replaced, onTakeBack }) {
+  if (replaced)
+    return (
+      <div className="conn-banner replaced" role="alert">
+        Partita aperta in un'altra scheda <button onClick={onTakeBack}>Gioca qui</button>
+      </div>
+    );
   if (status === "online")
     return <div className="conn-banner online" role="status">🟢 Connesso</div>;
+  if (status === "restored")
+    return <div className="conn-banner restored" role="status">🟢 Connessione ripristinata</div>;
   if (status === "connecting")
     return <div className="conn-banner connecting" role="status">🟡 Connessione…</div>;
-  return <div className="conn-banner lost" role="status">🔴 Connessione persa — riconnessione…</div>;
+  if (status === "reconnecting")
+    return <div className="conn-banner reconnecting" role="status">🟡 Riconnessione in corso...</div>;
+  return <div className="conn-banner lost" role="status">🔴 Connessione persa. Tentativo di riconnessione...</div>;
 }
 
 /* ---------------- HOME ---------------- */
@@ -365,8 +483,10 @@ function InstallHint() {
 
   useEffect(() => {
     const on = (e) => { e.preventDefault(); setDeferred(e); };
+    const done = () => { setDeferred(null); setDismissed(true); };   // installata: l'avviso sparisce
     window.addEventListener("beforeinstallprompt", on);
-    return () => window.removeEventListener("beforeinstallprompt", on);
+    window.addEventListener("appinstalled", done);
+    return () => { window.removeEventListener("beforeinstallprompt", on); window.removeEventListener("appinstalled", done); };
   }, []);
 
   if (dismissed || isStandalone()) return null;          // già installata: niente avviso
@@ -377,11 +497,11 @@ function InstallHint() {
   return (
     <div className="install-hint">
       <button className="ih-close" onClick={close} aria-label="Chiudi">✕</button>
-      <div className="ih-title">📲 Installa Cart King</div>
+      <div className="ih-title">📲 Installa KING</div>
       {isIOS() ? (
         <p className="ih-text">
-          Tocca <b>Condividi</b> <ShareIcon /> nella barra di Safari,
-          poi <b>Aggiungi a Home</b>. Il gioco si apre a schermo intero, senza barre del browser.
+          In Safari tocca <b>Condividi</b> <ShareIcon />, poi <b>Aggiungi alla schermata Home</b>
+          e conferma con <b>Aggiungi</b>. Il gioco si apre a schermo intero, senza barre del browser.
         </p>
       ) : (
         <>
@@ -1903,6 +2023,11 @@ function Style() {
       background:rgba(0,0,0,.45); border:1px solid rgba(255,255,255,.15); backdrop-filter:blur(3px); }
     .conn-banner.online { opacity:0; transition:opacity .4s ease .8s; }  /* sparisce quando è tutto ok */
     .conn-banner.lost { background:rgba(192,57,43,.85); border-color:#e07; }
+    .conn-banner.reconnecting { background:rgba(150,110,20,.85); border-color:rgba(255,210,120,.5); }
+    .conn-banner.restored { background:rgba(30,120,70,.85); border-color:rgba(140,230,170,.5); }
+    .conn-banner.replaced { pointer-events:auto; background:rgba(20,40,30,.92); border-color:rgba(217,178,95,.5); }
+    .conn-banner.replaced button { margin-left:8px; padding:2px 9px; border-radius:999px; border:none;
+      background:var(--gold); color:#1a1205; font:700 11px inherit; cursor:pointer; }
 
     @media (max-width:780px) {
       .ck-card { width:44px; height:64px; } .ck-card .pip { font-size:20px; }

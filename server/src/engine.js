@@ -31,7 +31,7 @@ export const CONFIG = {
       protectedSuit: "hearts", totalPenaltyCards: 13,
       penalty: (c) => (c.suit === "hearts" ? -1 : 0) },
     lastTwoTricks: { title: "Ultime Due Prese", short: "ULTIME DUE PRESE", trick: true,
-      penalty: () => 0, trickPenalty: (ctx) => (ctx.trickNumber >= ctx.totalTricks - 1 ? -4 : 0) },
+      penalty: () => 0, trickPenalty: (ctx) => (ctx.trickNumber >= ctx.totalTricks - 2 ? -4 : 0) }, // trickNumber parte da 0: prese 12 e 13
     noTricks: { title: "No Prese", short: "NO PRESE", trick: true,
       penalty: () => 0, trickPenalty: () => -1 },
     domino: { title: "Domino", short: "DOMINO", trick: false },

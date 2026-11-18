@@ -56,11 +56,37 @@ Nella lobby premi **📤 Condividi stanza**:
 L'amico apre il link: l'app riconosce la stanza, gli chiede solo il nome ed entra.
 In alternativa può aprire il sito e digitare il codice in **ENTRA IN UNA STANZA**.
 
-## 5. Come installare la PWA sul telefono
-Aprendo il link dal browser il gioco funziona subito. Per aggiungerlo alla schermata Home:
-- **iPhone (Safari):** tasto Condividi → “Aggiungi alla schermata Home”.
-- **Android (Chrome):** menu ⋮ → “Installa app” / “Aggiungi a schermata Home”.
-Si apre a schermo intero con icona e nome “Cart King”. L'installazione è opzionale.
+## 5. Come installare l'app KING sul telefono
+Aprendo il link dal browser il gioco funziona subito. Per averlo come app sulla schermata Home:
+- **Android (Chrome):** nella home del gioco compare il riquadro **📲 Installa KING** → **INSTALLA**.
+  In alternativa: menu ⋮ → “Installa app” (o “Aggiungi a schermata Home”).
+- **iPhone / iPad (Safari):** tasto **Condividi** (quadrato con la freccia) → **Aggiungi alla schermata Home**
+  → **Aggiungi**. Il riquadro nella home del gioco ricorda questi passaggi.
+Si apre a schermo intero, senza barre del browser, con icona e nome “KING”. L'installazione è opzionale;
+se l'app è già installata il riquadro non compare.
+
+**Come funziona (file):** `client/public/manifest.webmanifest` (nome, colori, icone),
+`client/public/sw.js` (service worker), `client/public/icons/` (icone 48–512 px, maskable, Apple),
+`client/public/splash/` (schermate di avvio iOS, verticali e orizzontali), meta tag in `client/index.html`.
+Il service worker salva solo il guscio dell'app (pagina, JS/CSS, carte, icone): **non** tocca mai
+`/socket.io` né `/api/`, quindi partite, chat, allegati e sessioni restano sempre live.
+Gli aggiornamenti: la pagina viene sempre chiesta prima alla rete, quindi una nuova versione arriva
+alla riapertura dell'app; la partita in corso non si perde perché la sessione si riprende da sola.
+
+**Provarla in locale:** `npm run build`, poi `cd server && npm start` e apri `http://localhost:3001`
+(il service worker funziona su `localhost` anche senza HTTPS). In Chrome: DevTools → Application →
+Manifest / Service workers; per l'offline spunta “Offline” e ricarica: si apre il guscio dell'app.
+Da telefono serve HTTPS (sull'IP di casa il service worker non parte): usa il deploy su Render.
+
+## Connessione stabile (telefono in background, rete che cade)
+- Ogni giocatore riceve dal server un **token di sessione** segreto (salvato nel telefono). Con quello,
+  dopo una caduta, una ricarica o la chiusura della scheda, rientra **da solo** al suo posto con carte,
+  turno e punti; senza token nessuno può prendere il posto di un altro.
+- Il server se ne accorge dopo ~30 s senza risposta (battito ogni 10 s); poi tiene il posto per
+  altri **90 s**. Solo dopo il posto passa a un bot (il proprietario che non torna chiude la stanza, come prima).
+- Quando l'app torna in primo piano (WhatsApp, schermo sbloccato, rete tornata) verifica subito il
+  collegamento e, se serve, si ricollega senza aspettare.
+- Se la stessa partita viene aperta in un'altra scheda, quella vecchia si ferma con “Gioca qui”.
 
 ## 6. Variabili / configurazioni per il deploy
 - `PORT` — porta del server (Render la imposta da sola).
@@ -69,6 +95,8 @@ Si apre a schermo intero con icona e nome “Cart King”. L'installazione è op
   Con il deploy consigliato (un unico servizio) **non serve impostare nulla**.
 - `CHAT_MAX_FILE_MB` — dimensione massima di ogni allegato in chat (predefinito 20).
 - `CHAT_ROOM_QUOTA_MB` — spazio totale per gli allegati di una stanza (predefinito 200).
+- `RECONNECT_GRACE_S` — secondi in cui il posto resta a chi è caduto (predefinito 90).
+- `PING_INTERVAL_S` / `PING_TIMEOUT_S` — battito e tolleranza della connessione (predefiniti 10 e 20).
 - `GIPHY_API_KEY` — opzionale: attiva la ricerca di GIF online. Senza chiave si possono
   comunque inviare GIF dal proprio dispositivo.
 

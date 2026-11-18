@@ -74,10 +74,32 @@
     <meta name="twitter:title" content="King" />
     <meta name="twitter:description" content="Il gioco di carte King (Barbu) in multiplayer: 13 mani, sfida gli amici online dal telefono." />
     <meta name="twitter:image" content="__ORIGIN__/og-king.jpg" />
-    <style>html,body{background:#0a3d26;margin:0}</style>
+    <meta name="ck-app" content="king" />
+    <style>
+      html,body{background:#0a3d26;margin:0}
+      /* schermata di avvio: identica qui (prima del JS) e in React (Splash) */
+      .ck-splash{position:fixed;inset:0;z-index:50;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:22px;
+        background:radial-gradient(ellipse at 50% 40%,#16704a 0%,#0f5132 45%,#0a3d26 100%);
+        padding:env(safe-area-inset-top) 24px env(safe-area-inset-bottom);font-family:system-ui,-apple-system,sans-serif;color:#f3e7c4;transition:opacity .35s}
+      .ck-splash.out{opacity:0;pointer-events:none}
+      .ck-splash-icon{width:min(46vw,220px);aspect-ratio:1;border-radius:22%;box-shadow:0 14px 40px rgba(0,0,0,.45),0 0 0 1px rgba(217,178,95,.35);
+        animation:ckPulse 2.4s ease-in-out infinite}
+      .ck-splash-name{font-size:30px;font-weight:800;letter-spacing:.18em;color:#d9b25f;margin:0}
+      .ck-splash-bar{width:min(62vw,260px);height:6px;border-radius:6px;background:rgba(0,0,0,.3);overflow:hidden}
+      .ck-splash-fill{height:100%;width:8%;border-radius:6px;background:linear-gradient(90deg,#b8913f,#f0cf7a);transition:width .6s ease}
+      .ck-splash-fill.indet{width:35%;animation:ckSlide 1.3s ease-in-out infinite}
+      .ck-splash-msg{min-height:40px;margin:0;font-size:14px;line-height:1.45;text-align:center;opacity:.85;max-width:300px}
+      .ck-splash-retry{margin-top:4px;padding:10px 22px;border-radius:10px;border:1px solid rgba(217,178,95,.6);background:rgba(217,178,95,.14);color:#d9b25f;font-weight:700;font-size:15px;-webkit-appearance:none}
+      @keyframes ckPulse{0%,100%{transform:scale(1)}50%{transform:scale(1.035)}}
+      @keyframes ckSlide{0%{transform:translateX(-110%)}100%{transform:translateX(300%)}}
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root"><div class="ck-splash" role="status" aria-label="Caricamento di King">
+      <img class="ck-splash-icon" src="/icons/icon-512.png" alt="" />
+      <div class="ck-splash-bar"><div class="ck-splash-fill indet"></div></div>
+      <p class="ck-splash-msg">Caricamento…</p>
+    </div></div>
     <script type="module" src="/src/main.jsx"></script>
     <script>
       // Service worker: guscio dell'app offline + installazione. Mai il multiplayer.

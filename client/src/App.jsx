@@ -241,6 +241,15 @@ export default function App() {
     fn();
   }
 
+  // app pronta (avvio finito): connessi e, se c'era una partita da riprendere, con lo stato già arrivato
+  const appReady = connStatus !== "connecting" && (!!state || !readSession());
+  useEffect(() => {
+    const fire = () => { if (!window.__ckReady) { window.__ckReady = true; window.dispatchEvent(new Event("ck:ready")); } };
+    if (appReady) { fire(); return; }
+    // rete di sicurezza: connessi ma la ripresa non risponde → non restare bloccati sull'avvio
+    if (connStatus !== "connecting") { const tm = setTimeout(fire, 8000); return () => clearTimeout(tm); }
+  }, [appReady, connStatus]);
+
   const connBanner = <ConnBanner status={connStatus} replaced={replaced}
     onTakeBack={() => { replacedRef.current = false; setReplaced(false); socketRef.current?.connect(); }} />;
   // chat della stanza: montata in tutte le schermate della stanza (lobby → fine partita),
@@ -249,8 +258,9 @@ export default function App() {
     ? <Chat key={state.code} socket={socketRef.current} serverUrl={SERVER_URL} />
     : null;
 
+  // finché non si è connessi la schermata di avvio (Splash) copre tutto
   if (connStatus === "connecting" && !state)
-    return <Shell notice={notice} onCloseNotice={() => setNotice(null)} chat={chatEl}>{connBanner}<div className="page-center"><Connecting /></div></Shell>;
+    return <Shell notice={notice} onCloseNotice={() => setNotice(null)} chat={chatEl}>{null}</Shell>;
 
   if (view === "home" || view === "join")
     return (

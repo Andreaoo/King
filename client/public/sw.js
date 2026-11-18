@@ -4,7 +4,7 @@
 //  - stato di gioco, sessione e token restano in memoria/localStorage, mai qui;
 //  - pagina: prima la rete (così arrivano gli aggiornamenti), la copia in cache serve solo offline;
 //  - file con l'hash nel nome (/assets/…), carte, icone e font: dalla cache, sono immutabili.
-const VERSION = "king-v7";
+const VERSION = "king-v8";
 const SHELL = `${VERSION}-shell`;     // pagina, manifest, icone, carte
 const ASSETS = `${VERSION}-assets`;   // JS/CSS buildati e font
 const MAX_ASSETS = 40;
@@ -17,6 +17,9 @@ self.addEventListener("install", (e) => {
   e.waitUntil((async () => {
     const c = await caches.open(SHELL);
     await c.addAll(PRECACHE);
+    // se il server stava ancora dormendo "/" è la pagina d'attesa di Render: installazione annullata, si riprova dopo
+    const home = await c.match("/");
+    if (!home || !isKing(await home.clone().text())) throw new Error("pagina di avvio non valida");
     // anche JS e CSS della versione attuale, letti dalla pagina appena scaricata
     try {
       const html = await (await c.match("/")).text();
@@ -34,6 +37,10 @@ self.addEventListener("activate", (e) => {
     await self.clients.claim();
   })());
 });
+
+// la pagina vera di King (e non la pagina d'attesa di Render o di un proxy)
+const HTML_H = { "Content-Type": "text/html; charset=utf-8" };
+const isKing = (html) => html.includes('name="ck-app"');
 
 const isLive = (url) =>
   url.pathname.startsWith("/socket.io") || url.pathname.startsWith("/api/");
@@ -65,16 +72,26 @@ self.addEventListener("fetch", (e) => {
   // multiplayer, chat, allegati: sempre e solo rete
   if (same && isLive(url)) return;
 
-  // pagina (anche /room/CODICE): rete prima; offline si apre la copia salvata
+  // pagina (anche /room/CODICE): rete prima, ma solo se risponde davvero King e in fretta.
+  // Se il server gratuito dorme, Render risponde con la sua pagina "Application loading":
+  // in quel caso (o offline, o rete lenta) si apre subito la copia salvata, che mostra la
+  // nostra schermata di avvio e si collega da sola appena il server è sveglio.
   if (req.mode === "navigate") {
     e.respondWith((async () => {
-      try {
+      const cached = await caches.match("/");
+      const net = (async () => {
         const res = await fetch(req, { cache: "no-store" });
-        if (res.ok) (await caches.open(SHELL)).put("/", res.clone());
-        return res;
-      } catch {
-        return (await caches.match("/")) || Response.error();
-      }
+        const html = await res.text();
+        if (!res.ok || !isKing(html)) throw new Error("non è King");
+        await (await caches.open(SHELL)).put("/", new Response(html, { headers: HTML_H }));
+        return new Response(html, { headers: HTML_H });
+      })();
+      if (!cached) return net.catch(() => fetch(req)); // primo avvio in assoluto: non c'è altro
+      const timeout = new Promise((r) => setTimeout(() => r(null), 3000));
+      const res = await Promise.race([net.catch(() => null), timeout]);
+      if (res) return res;
+      e.waitUntil(net.catch(() => {})); // la versione nuova, se arriva, sarà pronta al prossimo avvio
+      return cached;
     })());
     return;
   }

@@ -392,15 +392,11 @@ function Home({ view, setView, name, setName, difficulty, setDifficulty, gameTyp
   return (
     <div className="home">
       <div className="home-hero">
-        {/* ventaglio decorativo con le carte vere del mazzo */}
-        <div className="home-fan" aria-hidden>
-          {["Aspades", "Khearts", "Qdiamonds", "Jclubs"].map((f, i) => (
-            <img key={f} src={`/cards/${f}.jpg`} alt="" draggable={false} style={{ "--i": i }} />
-          ))}
-        </div>
-        <h1 className="home-title">CART KING</h1>
+        {/* copertina del gioco (contiene già la scritta: il titolo resta per gli screen reader) */}
+        <img className="home-cover" src="/cover.jpg" srcSet="/cover-768.jpg 768w, /cover.jpg 1200w"
+          sizes="(max-width: 560px) 100vw, 520px" width="1200" height="800" alt="King" draggable={false} />
+        <h1 className="home-title sr-only">King</h1>
         <p className="home-sub">Barbu · 13 mani · multiplayer online</p>
-        <div className="home-suits" aria-hidden><span>♠</span><span className="r">♥</span><span>♣</span><span className="r">♦</span></div>
       </div>
 
       {cameFromLink && (
@@ -497,7 +493,7 @@ function InstallHint() {
   return (
     <div className="install-hint">
       <button className="ih-close" onClick={close} aria-label="Chiudi">✕</button>
-      <div className="ih-title">📲 Installa KING</div>
+      <div className="ih-title">📲 Installa King</div>
       {isIOS() ? (
         <p className="ih-text">
           In Safari tocca <b>Condividi</b> <ShareIcon />, poi <b>Aggiungi alla schermata Home</b>
@@ -623,11 +619,11 @@ function Lobby({ state, pid, onStart, onConfig, onSetTeam, onLeave }) {
   };
 
   const roomUrl = `${window.location.origin}/room/${state.code}`;
-  const shareText = `🃏 Vieni a giocare a Cart King!\n\nLink: ${roomUrl}\nCodice stanza: ${state.code}`;
+  const shareText = `🃏 Vieni a giocare a King!\n\nLink: ${roomUrl}\nCodice stanza: ${state.code}`;
 
   async function share() {
     if (navigator.share) {
-      try { await navigator.share({ title: "Cart King", text: shareText, url: roomUrl }); return; }
+      try { await navigator.share({ title: "King", text: shareText, url: roomUrl }); return; }
       catch { /* annullato */ }
     }
     try {
@@ -943,7 +939,7 @@ function Game({ state: s, pid, guardedAct, onPlay, onTrump, onBlind, onPass, onN
       <div className="ck-topbar">
         <div className="ck-brand">
           <button className="menu-toggle" onClick={() => setShowSidebar((v) => !v)} title="Modalità e punteggi">☰</button>
-          🃏 CART KING <small>· {s.code}</small>
+          🃏 King <small>· {s.code}</small>
         </div>
         <div className="ck-status">
           <span><b>Mano</b> {s.modeIndex + 1}/{s.totalModes} — {s.modeShort}</span>
@@ -1461,6 +1457,13 @@ function Style() {
       display:flex; flex-direction:column; justify-content:center;
       padding:calc(22px + var(--sat)) calc(16px + var(--sar)) calc(22px + var(--sab)) calc(16px + var(--sal)); }
     .home-hero { margin-bottom:18px; }
+    .home-cover { display:block; width:min(100%, 520px, 51dvh); height:auto; aspect-ratio:3/2; margin:0 auto 12px;
+      border-radius:18px; object-fit:cover; user-select:none; -webkit-user-select:none;
+      box-shadow:0 18px 40px rgba(0,0,0,.5), 0 0 0 1px rgba(217,178,95,.35);
+      animation:homeCover .7s cubic-bezier(.2,.9,.3,1.1) both; }
+    @keyframes homeCover { from { opacity:0; transform:translateY(12px) scale(.97); } }
+    .sr-only { position:absolute !important; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden;
+      clip:rect(0 0 0 0); white-space:nowrap; border:0; }
     .home-fan { position:relative; width:220px; height:122px; margin:0 auto 4px; }
     .home-fan img { position:absolute; left:50%; bottom:0; width:70px; height:105px; margin-left:-35px;
       border-radius:7px; box-shadow:0 8px 18px rgba(0,0,0,.45), 0 0 0 1px rgba(0,0,0,.15);

@@ -1,4 +1,4 @@
-# 🃏 Cart King — Multiplayer online (PWA)
+# 🃏 King — Multiplayer online (PWA)
 
 Barbu a 13 mani, mazzo francese 52 carte. Multiplayer online in tempo reale:
 si gioca da **telefono, tablet o PC aprendo un link**, senza installare nulla.
@@ -49,16 +49,16 @@ Nella lobby premi **📤 Condividi stanza**:
 - su smartphone si apre il menu di condivisione di iOS/Android;
 - altrimenti il messaggio viene copiato negli appunti:
   ```
-  🃏 Vieni a giocare a Cart King!
+  🃏 Vieni a giocare a King!
   Link: https://.../room/K7P2
   Codice stanza: K7P2
   ```
 L'amico apre il link: l'app riconosce la stanza, gli chiede solo il nome ed entra.
 In alternativa può aprire il sito e digitare il codice in **ENTRA IN UNA STANZA**.
 
-## 5. Come installare l'app KING sul telefono
+## 5. Come installare l'app King sul telefono
 Aprendo il link dal browser il gioco funziona subito. Per averlo come app sulla schermata Home:
-- **Android (Chrome):** nella home del gioco compare il riquadro **📲 Installa KING** → **INSTALLA**.
+- **Android (Chrome):** nella home del gioco compare il riquadro **📲 Installa King** → **INSTALLA**.
   In alternativa: menu ⋮ → “Installa app” (o “Aggiungi a schermata Home”).
 - **iPhone / iPad (Safari):** tasto **Condividi** (quadrato con la freccia) → **Aggiungi alla schermata Home**
   → **Aggiungi**. Il riquadro nella home del gioco ricorda questi passaggi.

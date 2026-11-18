@@ -220,6 +220,9 @@ function Panel({ shown, chat, settings, setSettings, layout, setLayout, narrow, 
   onMinimize, onClose, fileUrl, serverUrl, openLightbox }) {
   const { info, roster, convs, dmConvs, typing } = chat;
   const me = info.me;
+  // animazioni attive solo poco dopo il montaggio: al cambio schermata il pannello nascosto non deve vedersi scorrere
+  const [armed, setArmed] = useState(false);
+  useEffect(() => { const t = setTimeout(() => setArmed(true), 500); return () => clearTimeout(t); }, []);
   const [showPlayers, setShowPlayers] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [replyTo, setReplyTo] = useState(null);
@@ -275,7 +278,7 @@ function Panel({ shown, chat, settings, setSettings, layout, setLayout, narrow, 
   );
 
   return (
-    <aside className={`ch-panel ${shown ? "shown" : ""} ${full ? "full" : ""}`} style={{ width }} aria-hidden={!shown}
+    <aside className={`ch-panel ${shown ? "shown" : ""} ${full ? "full" : ""} ${armed ? "armed" : ""}`} style={{ width }} aria-hidden={!shown}
       onDragOver={onDragOver} onDragLeave={(e) => { if (e.currentTarget === e.target) setDropping(false); }} onDrop={onDrop}>
       {!full && !narrow && (
         <div className="ch-resize" title="Trascina per ridimensionare"

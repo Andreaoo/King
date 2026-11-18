@@ -46,6 +46,8 @@ body.ch-resizing { cursor:ew-resize; user-select:none; }
 .ch-panel.shown { transform:none; visibility:visible; transition:transform .3s cubic-bezier(.2,.8,.2,1), width .25s ease, visibility 0s; }
 .ch-panel.full { border-left:none; }
 body.ch-resizing .ch-panel { transition:none; }
+/* appena montato: niente animazioni (su iPhone il pannello nascosto si vedeva scorrere a destra al cambio schermata) */
+.ch-panel:not(.armed) { transition:none; }
 .ch-resize { position:absolute; left:-4px; top:0; bottom:0; width:9px; cursor:ew-resize; z-index:5; touch-action:none; }
 .ch-resize::after { content:""; position:absolute; left:3px; top:50%; height:46px; margin-top:-23px; width:3px; border-radius:2px;
   background:var(--c-line); transition:background .2s; }

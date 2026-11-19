@@ -318,7 +318,7 @@ export function botChooseTrump(hand, difficulty) {
     // privilegia il seme lungo E forte (una briscola lunga domina la mano)
     for (const s of SUITS) strength[s] += count[s] * count[s] * 0.4;
   }
-  return SUITS.sort((a, b) => strength[b] - strength[a])[0];
+  return [...SUITS].sort((a, b) => strength[b] - strength[a])[0]; // copia: SUITS è condiviso, non va riordinato
 }
 export function botDecidesReshuffle(extremes, difficulty) {
   if (extremes < 4) return false; // regola: serve un minimo di 4 estremi

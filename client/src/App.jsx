@@ -2,6 +2,7 @@ import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "re
 import { io } from "socket.io-client";
 import Chat from "./chat/Chat.jsx";
 import ScoreChart from "./ScoreChart.jsx";
+import LuckBoard from "./LuckBoard.jsx";
 
 // In produzione il client è servito dallo stesso server Node → stesso origin.
 // In sviluppo punta al server locale su :3001 (override con VITE_SERVER_URL).
@@ -956,6 +957,8 @@ function Game({ state: s, pid, guardedAct, onPlay, onTrump, onBlind, onPass, onN
     <div className="game">
       <div className="ck-topbar">
         <div className="ck-brand">
+          {/* nell'angolo in alto a sinistra: in alto a destra c'è la ✕ della chat, troppo vicina */}
+          <button className="ck-exit" onClick={() => { if (confirm("Uscire dalla partita?")) onLeave(); }}>← Esci</button>
           <button className="menu-toggle" onClick={() => setShowSidebar((v) => !v)} title="Modalità e punteggi">☰</button>
           🃏 CART KING <small>· {s.code}</small>
         </div>
@@ -967,7 +970,6 @@ function Game({ state: s, pid, guardedAct, onPlay, onTrump, onBlind, onPass, onN
           )}
           {!s.trump && s.isTrickMode && s.modeKey === "hiddenTrump" && <span className="trump hidden"><b>Senza briscola</b></span>}
         </div>
-        <button className="ck-exit" onClick={() => { if (confirm("Uscire dalla partita?")) onLeave(); }}>✕ Esci</button>
       </div>
 
       {showSidebar && (
@@ -1157,6 +1159,7 @@ function EndScreen({ s, isOwner, onNext, onLeave }) {
             !isOver && membri(1).map((x) => `${x.p.name} ${s.handScores[x.i] > 0 ? "+" : ""}${s.handScores[x.i]}`).join(" · "))}
         </div>
         {isOver && <ScoreChart history={s.scoreHistory || []} players={s.players} teams={s.teams} gameType={s.gameType} />}
+        {isOver && <LuckBoard history={s.scoreHistory || []} players={s.players} />}
         {!isOver && (
           <>
             <div className="side-title">Totale partita</div>
@@ -1205,6 +1208,7 @@ function EndScreen({ s, isOwner, onNext, onLeave }) {
             ))}
           </ol>
           <ScoreChart history={s.scoreHistory || []} players={s.players} gameType={s.gameType} />
+          <LuckBoard history={s.scoreHistory || []} players={s.players} />
           <button className="btn primary wide" onClick={onLeave}>TORNA AL MENU</button>
         </>
       ) : (
@@ -1683,7 +1687,8 @@ function Style() {
     .ck-status b { color:var(--gold); font-weight:600; margin-right:4px; font-size:13px; letter-spacing:.06em; }
     .trump.red { color:#ff9d8a; } .trump.hidden { color:var(--muted); }
     .ck-exit { background:rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.2); color:var(--paper);
-      border-radius:8px; padding:7px 14px; font-size:13px; font-weight:500; }
+      border-radius:8px; padding:7px 14px; font-size:13px; font-weight:500; margin-right:10px; vertical-align:middle;
+      font-family:'Outfit',system-ui,sans-serif; letter-spacing:0; }
     .ck-exit:hover { background:rgba(192,57,43,.35); border-color:var(--danger); }
     .ck-modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,.6); z-index:100;
       display:flex; align-items:center; justify-content:center; padding:20px; backdrop-filter:blur(2px); }

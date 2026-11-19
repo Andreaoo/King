@@ -7,6 +7,7 @@ import {
     validTrickMoves, updateBrokenSuits, resolveTrick, dominoValidCards,
     botChooseCard, botChooseTrump, botDecidesReshuffle,
 } from "./engine.js";
+import { luckOfDeal } from "./luck/index.js";
 
 const BOT_NAMES = ["Bot 1", "Bot 2", "Bot 3", "Bot 4"];
 const DIFF_LABEL = { easy: "Facile", neutral: "Neutro", hard: "Difficile", extreme: "Estremo" };
@@ -207,9 +208,36 @@ export class GameRoom {
             return;
         }
         const originalName = p.name;
+        // il posto ricorda di chi era: se rientra (con il suo token) lo riprende al volo
+        const former = { id: p.id, name: p.name, token: p.token };
         this.replacePlayerWithBot(p);
-        this.notice = `${originalName} si è disconnesso — sostituito da un bot.`;
+        p.formerHuman = former;
+        this.notice = `${originalName} si è disconnesso — sostituito da un bot. Può rientrare quando vuole.`;
         this.emit();
+    }
+
+    // posto occupato da un bot al posto di questo giocatore disconnesso (null se non c'è)
+    seatHeldFor(playerId) {
+        return this.players.find((x) => x.bot && x.formerHuman && x.formerHuman.id === playerId) || null;
+    }
+
+    // il giocatore disconnesso rientra: riprende il suo posto, le sue carte e i suoi punti
+    // (tutto è legato al posto, quindi il bot gli restituisce la mano esattamente com'è)
+    restoreHuman(p) {
+        const f = p.formerHuman;
+        if (!f) return null;
+        p.bot = false;
+        p.id = f.id;
+        p.name = f.name;
+        p.token = f.token;
+        delete p.formerHuman;
+        delete p.difficulty;
+        delete p.diffLabel;
+        this.notice = `${f.name} è rientrato e riprende il suo posto.`;
+        // se toccava al bot, ora tocca a lui: il driver dei bot si ferma da solo (vede bot=false)
+        if (this.status === "playing") this.scheduleBot();
+        if (this.status === "choosing") this.scheduleNegotiationBot();
+        return p;
     }
 
     replacePlayerWithBot(p) {
@@ -415,8 +443,21 @@ export class GameRoom {
         } else {
             this.message = this.mode.title;
         }
+        this.computeLuck();
         this.emit();
         this.scheduleBot();
+    }
+
+    // Indice di fortuna delle carte appena ricevute (0–100, vedi luck/index.js).
+    // Si calcola a mano ancora intatta; con "Seme scelto" solo dopo la scelta della briscola.
+    // Resta sul server: i client lo vedono solo a fine mano (direbbe com'è la mano degli altri).
+    computeLuck() {
+        this.handLuck = null;
+        try {
+            if (this.modeKey === "chosenTrump" && !this.trump) return;
+            const l = luckOfDeal(this.modeKey, this.hands, { trump: this.trump });
+            if (l.every((x) => typeof x === "number")) this.handLuck = l;
+        } catch (e) { console.error("indice di fortuna:", e.message); }
     }
 
     chooseTrump(playerId, suit) {
@@ -426,6 +467,7 @@ export class GameRoom {
         this.trump = suit;
         this.protectedSuit = suit; // spezzare: la briscola scelta è protetta
         this.awaitingTrump = false;
+        this.computeLuck();
         this.message = `Briscola: ${suit}`;
         this.emit();
         this.scheduleBot();
@@ -599,7 +641,8 @@ export class GameRoom {
     // -------- fine mano / partita --------
     finishMode() {
         this.totalScores = this.totalScores.map((v, i) => v + this.handScores[i]);
-        this.scoreHistory.push({ key: this.modeKey, title: this.mode.title, scores: [...this.handScores] });
+        this.scoreHistory.push({ key: this.modeKey, title: this.mode.title, scores: [...this.handScores],
+            luck: this.handLuck ? [...this.handLuck] : null });
         this.status = "modeEnd";
         clearTimeout(this.botTimer);
         this.emit();
@@ -640,6 +683,7 @@ export class GameRoom {
             if (this.awaitingTrump && this.modeKey === "chosenTrump") {
                 this.trump = botChooseTrump(this.hands[seat], p.difficulty);
                 this.awaitingTrump = false;
+                this.computeLuck();
                 this.message = `${p.name} sceglie briscola`;
                 this.emit();
                 return this.scheduleBot();

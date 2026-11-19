@@ -210,9 +210,14 @@ io.on("connection", (socket) => {
     function resume({ room: code, pid, token } = {}) {
         const room = rooms.get(String(code || "").toUpperCase());
         if (!room || room.status === "closed") return { ok: false, error: "gone" };
-        const p = room.players.find((x) => x.id === pid && !x.bot);
-        if (!p) return { ok: false, error: "gone" };
-        if (!tokenOk(p, token)) return { ok: false, error: "auth" };
+        let p = room.players.find((x) => x.id === pid && !x.bot);
+        if (!p) {
+            // sostituito da un bot dopo la disconnessione: riprende il posto se è davvero lui
+            const held = room.seatHeldFor(pid);
+            if (!held) return { ok: false, error: "gone" };
+            if (!tokenOk(held.formerHuman, token)) return { ok: false, error: "auth" };
+            p = room.restoreHuman(held);
+        } else if (!tokenOk(p, token)) return { ok: false, error: "auth" };
         bind(room, p);
         return { ok: true, code: room.code, token: p.token };
     }
@@ -250,6 +255,14 @@ io.on("connection", (socket) => {
             if (!tokenOk(existing, token)) return cb?.({ ok: false, error: "Sessione non valida per questo posto" });
             cb?.({ ok: true, code: room.code, token: existing.token });
             return bind(room, existing);
+        }
+        const held = room.seatHeldFor(pid);
+        if (held) {
+            // era in partita ed è stato sostituito da un bot: rientra al suo posto
+            if (!tokenOk(held.formerHuman, token)) return cb?.({ ok: false, error: "Sessione non valida per questo posto" });
+            const p = room.restoreHuman(held);
+            cb?.({ ok: true, code: room.code, token: p.token });
+            return bind(room, p);
         }
         if (room.status !== "lobby") return cb?.({ ok: false, error: "La partita è già iniziata" });
         const p = room.addHuman(pid, name, socket.id);

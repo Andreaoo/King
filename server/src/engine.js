@@ -1,5 +1,5 @@
 // ============================================================================
-// CART KING — Motore di gioco autoritativo (server-side)
+// KING — Motore di gioco autoritativo (server-side)
 // Logica pura, nessuna dipendenza. Allineato alla versione locale.
 // ============================================================================
 

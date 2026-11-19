@@ -1,5 +1,5 @@
 // ============================================================================
-// Server Socket.IO per Cart King multiplayer.
+// Server Socket.IO per King multiplayer.
 // In produzione serve ANCHE il frontend buildato (client/dist), così frontend
 // e backend stanno su un unico servizio. La logica di gioco è in room.js/engine.js
 // e NON viene toccata qui.
@@ -109,7 +109,7 @@ const httpServer = createServer(async (req, res) => {
     // se non c'è il frontend buildato, resta un semplice endpoint di stato
     if (!hasDist) {
         res.writeHead(200, { "Content-Type": "text/plain" });
-        res.end("Cart King server attivo (solo backend). Builda il client per servirlo da qui.");
+        res.end("King server attivo (solo backend). Builda il client per servirlo da qui.");
         return;
     }
     try {
@@ -366,4 +366,4 @@ function cleanup(room) {
     }, EMPTY_ROOM_MS);
 }
 
-httpServer.listen(PORT, () => console.log(`🃏 Cart King server su http://localhost:${PORT}`));
+httpServer.listen(PORT, () => console.log(`🃏 King server su http://localhost:${PORT}`));

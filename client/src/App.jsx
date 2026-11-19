@@ -411,7 +411,7 @@ function Home({ view, setView, name, setName, difficulty, setDifficulty, gameTyp
             <img key={f} src={`/cards/${f}.jpg`} alt="" draggable={false} style={{ "--i": i }} />
           ))}
         </div>
-        <h1 className="home-title">CART KING</h1>
+        <h1 className="home-title">KING</h1>
         <p className="home-sub">Barbu · 13 mani · multiplayer online</p>
         <div className="home-suits" aria-hidden><span>♠</span><span className="r">♥</span><span>♣</span><span className="r">♦</span></div>
       </div>
@@ -636,11 +636,11 @@ function Lobby({ state, pid, onStart, onConfig, onSetTeam, onLeave }) {
   };
 
   const roomUrl = `${window.location.origin}/room/${state.code}`;
-  const shareText = `🃏 Vieni a giocare a Cart King!\n\nLink: ${roomUrl}\nCodice stanza: ${state.code}`;
+  const shareText = `🃏 Vieni a giocare a King!\n\nLink: ${roomUrl}\nCodice stanza: ${state.code}`;
 
   async function share() {
     if (navigator.share) {
-      try { await navigator.share({ title: "Cart King", text: shareText, url: roomUrl }); return; }
+      try { await navigator.share({ title: "King", text: shareText, url: roomUrl }); return; }
       catch { /* annullato */ }
     }
     try {
@@ -960,7 +960,7 @@ function Game({ state: s, pid, guardedAct, onPlay, onTrump, onBlind, onPass, onN
           {/* nell'angolo in alto a sinistra: in alto a destra c'è la ✕ della chat, troppo vicina */}
           <button className="ck-exit" onClick={() => { if (confirm("Uscire dalla partita?")) onLeave(); }}>← Esci</button>
           <button className="menu-toggle" onClick={() => setShowSidebar((v) => !v)} title="Modalità e punteggi">☰</button>
-          🃏 CART KING <small>· {s.code}</small>
+          🃏 KING <small>· {s.code}</small>
         </div>
         <div className="ck-status">
           <span><b>Mano</b> {s.modeIndex + 1}/{s.totalModes} — {s.modeShort}</span>

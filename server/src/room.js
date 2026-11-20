@@ -69,6 +69,90 @@ export class GameRoom {
         this.proposals = [];              // [{key, trump}]
         this.handsPlayed = 0;
         this.negTimer = null;
+
+        // ---- stanza privata ----
+        this.createdAt = Date.now();
+        this.banned = new Set();          // pid rimossi dal proprietario: non rientrano
+        this.closeReason = null;          // "owner" (chiusa dal proprietario) | "empty"
+        this.accessCode = null;           // codice da digitare (assegnato da index.js)
+        this.invite = null;               // segreto del link /invite/… (assegnato da index.js)
+    }
+
+    // ---- proprietario e sala d'attesa ----
+    get owner() { return this.players.find((p) => p.id === this.ownerId) || null; }
+    humans() { return this.players.filter((p) => !p.bot); }
+
+    // passa il ruolo di proprietario a un altro umano (prima chi è connesso).
+    // Restituisce il nuovo proprietario, o null se non c'è nessuno a cui passarlo.
+    transferOwnership() {
+        const others = this.humans().filter((p) => p.id !== this.ownerId);
+        const next = others.find((p) => p.connected) || others[0] || null;
+        if (!next) return null;
+        this.ownerId = next.id;
+        next.ready = false;
+        return next;
+    }
+
+    // in sala d'attesa chi se ne va libera il posto (i posti vuoti diventano bot all'avvio)
+    removeFromLobby(p) {
+        this.players = this.players.filter((x) => x !== p);
+        this.players.forEach((x, i) => (x.seat = i));
+    }
+
+    setReady(playerId, ready) {
+        if (this.status !== "lobby") return;
+        const p = this.players.find((x) => x.id === playerId);
+        if (!p || p.id === this.ownerId) return;
+        p.ready = !!ready;
+        this.emit();
+    }
+
+    // il proprietario rimuove un giocatore: non potrà rientrare con lo stesso invito
+    kick(seat) {
+        const p = this.players[seat];
+        if (!p || p.bot || p.id === this.ownerId) return null;
+        this.banned.add(p.id);
+        clearTimeout(p.dropTimer);
+        const info = { id: p.id, socketId: p.socketId, name: p.name };
+        if (this.status === "lobby") this.removeFromLobby(p);
+        else { this.markAbandoned(p.seat); this.replacePlayerWithBot(p); }  // in partita il posto passa a un bot
+        this.notice = `${info.name} è stato rimosso dal proprietario.`;
+        this.emit();
+        return info;
+    }
+
+    markAbandoned(seat) {
+        const x = this.participants && this.participants[seat];
+        if (x && !x.isBot) x.abandoned = true;
+    }
+
+    // dati della partita conclusa per le statistiche (null se non c'è niente da salvare)
+    gameRecord() {
+        if (!this.gameId || !this.participants || !this.participants.some((x) => !x.isBot)) return null;
+        const luck = [0, 1, 2, 3].map((i) => {
+            const v = (this.scoreHistory || []).map((h) => h.luck?.[i]).filter((x) => typeof x === "number");
+            return v.length ? Math.round(v.reduce((a, b) => a + b, 0) / v.length * 10) / 10 : null;
+        });
+        // chi è stato sostituito dal bot e non è mai rientrato ha abbandonato
+        const participants = this.participants.map((x) => {
+            const p = this.players[x.seat];
+            return { ...x, abandoned: x.abandoned || (!x.isBot && !!p && p.bot) };
+        });
+        return {
+            gameId: this.gameId, gameType: this.gameType, startedAt: this.startedAt, endedAt: Date.now(),
+            handsPlayed: (this.scoreHistory || []).length, completed: true,
+            totals: [...this.totalScores], teams: [...this.teams], participants, luck,
+        };
+    }
+
+    // chiusura della stanza decisa dal proprietario (o perché non resta nessuno)
+    close(reason = "owner") {
+        this.status = "closed";
+        this.closedByMaster = true;
+        this.closeReason = reason;
+        clearTimeout(this.botTimer); clearTimeout(this.negTimer);
+        this.stopWatchdog();
+        this.emit();
     }
 
     // ---- utilità delle coppie ----
@@ -113,7 +197,7 @@ export class GameRoom {
         let p = this.players.find((x) => x.id === playerId);
         if (p) { p.connected = true; p.socketId = socketId; return p; } // riconnessione
         if (this.players.filter((x) => !x.bot).length >= 4) return null;
-        p = { id: playerId, name: name || "Giocatore", bot: false, connected: true, socketId, seat: this.players.length };
+        p = { id: playerId, name: name || "Giocatore", bot: false, connected: true, socketId, seat: this.players.length, ready: false };
         this.players.push(p);
         if (!this.ownerId) this.ownerId = playerId;
         return p;
@@ -179,19 +263,17 @@ export class GameRoom {
         const p = this.players.find((x) => x.id === playerId);
         if (!p || p.bot) return { closed: false };
 
-        if (playerId === this.ownerId) {
-            // il proprietario esce: chiude tutto
-            this.status = "closed";
-            this.closedByMaster = true;
-            this.stopWatchdog();
-            this.emit();
-            return { closed: true };
-        }
-
-        // giocatore normale: diventa un bot, la partita continua
         const originalName = p.name;
-        this.replacePlayerWithBot(p);
-        this.notice = `${originalName} ha lasciato la partita — sostituito da un bot.`;
+        const wasOwner = playerId === this.ownerId;
+        // il proprietario che esce passa il ruolo a un altro; se non c'è nessuno la stanza si chiude
+        const heir = wasOwner ? this.transferOwnership() : null;
+        if (wasOwner && !heir) { this.close("empty"); return { closed: true }; }
+
+        if (this.status === "lobby") this.removeFromLobby(p);
+        else { this.markAbandoned(p.seat); this.replacePlayerWithBot(p); }   // in partita: un bot prende il posto
+        this.notice = `${originalName} ha lasciato la ${this.status === "lobby" ? "stanza" : "partita"}`
+            + (this.status === "lobby" ? "." : " — sostituito da un bot.")
+            + (heir ? ` Ora il proprietario è ${heir.name}.` : "");
         this.emit();
         return { closed: false };
     }
@@ -200,19 +282,23 @@ export class GameRoom {
     convertToBotIfStillOffline(playerId) {
         const p = this.players.find((x) => x.id === playerId);
         if (!p || p.bot || p.connected) return;
-        if (playerId === this.ownerId) {
-            this.status = "closed";
-            this.closedByMaster = true;
-            this.stopWatchdog();
+        const originalName = p.name;
+        // il proprietario non torna in tempo: il ruolo passa a un altro, la stanza resta
+        const heir = playerId === this.ownerId ? this.transferOwnership() : null;
+        if (playerId === this.ownerId && !heir) { this.close("empty"); return; }
+        const tail = heir ? ` Ora il proprietario è ${heir.name}.` : "";
+        if (this.status === "lobby") {
+            // in sala d'attesa il posto si libera (può rientrare con l'invito)
+            this.removeFromLobby(p);
+            this.notice = `${originalName} si è disconnesso.${tail}`;
             this.emit();
             return;
         }
-        const originalName = p.name;
         // il posto ricorda di chi era: se rientra (con il suo token) lo riprende al volo
-        const former = { id: p.id, name: p.name, token: p.token };
+        const former = { id: p.id, name: p.name, token: p.token, userId: p.userId || null, guest: p.guest || null };
         this.replacePlayerWithBot(p);
         p.formerHuman = former;
-        this.notice = `${originalName} si è disconnesso — sostituito da un bot. Può rientrare quando vuole.`;
+        this.notice = `${originalName} si è disconnesso — sostituito da un bot. Può rientrare quando vuole.${tail}`;
         this.emit();
     }
 
@@ -230,6 +316,8 @@ export class GameRoom {
         p.id = f.id;
         p.name = f.name;
         p.token = f.token;
+        p.userId = f.userId || null;
+        p.guest = f.guest || null;
         delete p.formerHuman;
         delete p.difficulty;
         delete p.diffLabel;
@@ -246,6 +334,8 @@ export class GameRoom {
         const name = BOT_NAMES.find((n) => !used.has(n)) || "Bot";
         p.bot = true;
         p.name = name;
+        p.userId = null;
+        p.guest = null;
         p.difficulty = this.difficulty;
         p.diffLabel = { easy: "Facile", neutral: "Neutro", hard: "Difficile" }[this.difficulty];
         p.connected = true;
@@ -260,6 +350,13 @@ export class GameRoom {
     start() {
         if (!this.teamsValid()) return;          // 2 contro 2 obbligatorio
         this.fillWithBots();
+        // chi gioca questa partita (per le statistiche): fotografia all'avvio
+        this.gameId = this.newGameId ? this.newGameId() : null;
+        this.startedAt = Date.now();
+        this.overHandled = false;
+        this.participants = this.players.map((p) => ({
+            seat: p.seat, nickname: p.name, isBot: !!p.bot, userId: p.userId || null, guest: p.guest || null, abandoned: false,
+        }));
         this.totalScores = [0, 0, 0, 0];
         this.scoreHistory = [];   // una voce per mano giocata: per il grafico finale
         this.modeIndex = 0;
@@ -649,7 +746,11 @@ export class GameRoom {
     }
 
     nextMode(playerId) {
-        if (playerId !== this.ownerId) return;
+        // di norma la mano successiva la avvia il proprietario; se è offline può farlo chiunque sia al tavolo
+        const owner = this.owner;
+        const ok = playerId === this.ownerId
+            || ((!owner || !owner.connected) && this.players.some((x) => x.id === playerId && !x.bot));
+        if (!ok) return;
         if (this.gameType === "teams") {
             this.handsPlayed += 1;
             if (this.matchOver()) { this.status = "gameOver"; this.stopWatchdog(); this.emit(); return; }
@@ -730,7 +831,14 @@ export class GameRoom {
             // solo "sei tu il proprietario?": il pid del proprietario non deve arrivare agli altri,
             // altrimenti chiunque potrebbe rientrare con quel pid e prenderne il posto
             isOwner: playerId === this.ownerId,
+            ownerSeat: this.players.findIndex((p) => p.id === this.ownerId),
+            ownerOffline: !!this.owner && !this.owner.connected,
             youSeat: seat,
+            // sala d'attesa privata: codice e link d'invito arrivano solo a chi è già nella stanza
+            accessCode: this.accessCode,
+            invite: this.invite,
+            roomName: `Stanza di ${this.owner ? this.owner.name : "—"}`,
+            closeReason: this.closeReason,
             difficulty: this.difficulty,
             // ---- gioco a coppie ----
             gameType: this.gameType,
@@ -750,6 +858,7 @@ export class GameRoom {
             players: this.players.map((p) => ({
                 name: p.name, bot: p.bot, seat: p.seat,
                 diffLabel: p.diffLabel, connected: p.connected,
+                isOwner: p.id === this.ownerId, ready: !!p.ready,
                 handCount: this.hands[p.seat] ? this.hands[p.seat].length : 0,
             })),
             modeIndex: this.modeIndex,
@@ -788,6 +897,10 @@ export class GameRoom {
     }
 
     emit() {
+        if (this.status === "gameOver" && !this.overHandled) {
+            this.overHandled = true;
+            try { this.onGameOver?.(this); } catch (e) { console.error("fine partita:", e.message); }
+        }
         for (const p of this.players) {
             if (!p.bot && p.socketId) this.io.to(p.socketId).emit("state", this.stateFor(p.id));
         }

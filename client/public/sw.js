@@ -4,14 +4,14 @@
 //  - stato di gioco, sessione e token restano in memoria/localStorage, mai qui;
 //  - pagina: prima la rete (così arrivano gli aggiornamenti), la copia in cache serve solo offline;
 //  - file con l'hash nel nome (/assets/…), carte, icone e font: dalla cache, sono immutabili.
-const VERSION = "king-v8";
+const VERSION = "king-v9";
 const SHELL = `${VERSION}-shell`;     // pagina, manifest, icone, carte
 const ASSETS = `${VERSION}-assets`;   // JS/CSS buildati e font
 const MAX_ASSETS = 40;
 
 const CARDS = ["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"]
   .flatMap((r) => ["hearts", "diamonds", "clubs", "spades"].map((s) => `/cards/${r}${s}.jpg`));
-const PRECACHE = ["/", "/manifest.webmanifest", "/icons/icon-192.png", "/icons/icon-512.png", ...CARDS];
+const PRECACHE = ["/", "/manifest.webmanifest", "/icons/icon-192.png", "/icons/icon-512.png", "/brand/king-home.jpg", ...CARDS];
 
 self.addEventListener("install", (e) => {
   e.waitUntil((async () => {
@@ -97,7 +97,7 @@ self.addEventListener("fetch", (e) => {
   }
 
   if (same && (url.pathname.startsWith("/assets/") || url.pathname.startsWith("/cards/")
-      || url.pathname.startsWith("/icons/") || url.pathname.startsWith("/splash/"))) {
+      || url.pathname.startsWith("/icons/") || url.pathname.startsWith("/splash/") || url.pathname.startsWith("/brand/"))) {
     e.respondWith(cacheFirst(req, url.pathname.startsWith("/assets/") ? ASSETS : SHELL));
     return;
   }

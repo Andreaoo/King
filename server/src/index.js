@@ -15,6 +15,7 @@ import { Server } from "socket.io";
 import { GameRoom } from "./room.js";
 import { RoomChat, CHAT_CONFIG, chatTokens, limits } from "./chat.js";
 import { FileStore } from "./chatFiles.js";
+import { verifyUser, guestFrom, recordGame, newGameId, guestHistory, claimGuest, deleteUser } from "./accounts.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3001;
@@ -103,9 +104,35 @@ async function chatApi(req, res, url) {
     return send(404, { error: "Not found" });
 }
 
+// ---------- API account (Supabase) ----------
+// Autenticazione: "Authorization: Bearer <token di accesso Supabase>", verificato dal server.
+async function readJson(req, max = 4096) {
+    let body = "";
+    for await (const chunk of req) { body += chunk; if (body.length > max) throw new Error("troppo grande"); }
+    return body ? JSON.parse(body) : {};
+}
+async function accountApi(req, res, url) {
+    const send = (code, body) => {
+        res.writeHead(code, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+        res.end(JSON.stringify(body));
+    };
+    if (req.method !== "POST") return send(405, { ok: false, error: "Metodo non ammesso" });
+    let body;
+    try { body = await readJson(req); } catch { return send(400, { ok: false, error: "Richiesta non valida" }); }
+    // statistiche temporanee dell'ospite: si dimostra l'identità con il suo segreto
+    if (url.pathname === "/api/guest/history") return send(200, await guestHistory(body.guest));
+    const token = String(req.headers.authorization || "").replace(/^Bearer\s+/i, "");
+    const user = await verifyUser(token);
+    if (!user) return send(401, { ok: false, error: "Sessione scaduta: accedi di nuovo." });
+    if (url.pathname === "/api/account/claim-guest") return send(200, await claimGuest(user, body.guest));
+    if (url.pathname === "/api/account/delete") return send(200, await deleteUser(user));
+    return send(404, { ok: false, error: "Not found" });
+}
+
 const httpServer = createServer(async (req, res) => {
     const url = new URL(req.url || "/", "http://x");
     if (url.pathname.startsWith("/api/chat/")) return chatApi(req, res, url);
+    if (url.pathname.startsWith("/api/account/") || url.pathname.startsWith("/api/guest/")) return accountApi(req, res, url);
     // se non c'è il frontend buildato, resta un semplice endpoint di stato
     if (!hasDist) {
         res.writeHead(200, { "Content-Type": "text/plain" });
@@ -169,8 +196,78 @@ const io = new Server(httpServer, {
 /** @type {Map<string, GameRoom>} */
 const rooms = new Map();
 
-const genCode = () =>
-    Array.from({ length: 4 }, () => "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"[Math.floor(Math.random() * 32)]).join("");
+// ---------------- stanze private: identificativo, codice d'accesso, invito ----------------
+// room.code   : identificativo interno (URL /room/…). Conoscerlo NON permette di entrare.
+// accessCode  : 6 caratteri da digitare (32^6 ≈ 1 miliardo di combinazioni + limite di tentativi)
+// invite      : segreto del link /invite/… (96 bit). Codice e invito si rigenerano insieme.
+const ALPHA = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";   // niente 0/O, 1/I: si legge e si detta bene
+const randCode = (n) => Array.from(randomBytes(n), (x) => ALPHA[x % 32]).join("");
+const genCode = () => randCode(6);
+const INVITE_TTL = (Number(process.env.INVITE_TTL_H) || 24) * 3600 * 1000;  // validità del link d'invito
+
+const byInvite = new Map();     // invite → room
+const byAccess = new Map();     // accessCode → room
+const deadInvites = new Map();  // invite/codice non più validi → { reason, at } (per spiegare l'errore)
+function retire(key, reason) {
+    if (!key) return;
+    deadInvites.set(key, { reason, at: Date.now() });
+    if (deadInvites.size > 5000) for (const [k, v] of deadInvites) if (Date.now() - v.at > 48 * 3600e3) deadInvites.delete(k);
+}
+function dropInvites(room, reason) {
+    if (room.invite && byInvite.get(room.invite) === room) { byInvite.delete(room.invite); retire(room.invite, reason); }
+    if (room.accessCode && byAccess.get(room.accessCode) === room) { byAccess.delete(room.accessCode); retire(room.accessCode, reason); }
+}
+function issueInvite(room, reason = "revoked") {
+    dropInvites(room, reason);
+    do { room.accessCode = randCode(6); } while (byAccess.has(room.accessCode));
+    room.invite = randomBytes(12).toString("base64url");
+    room.inviteExpires = Date.now() + INVITE_TTL;
+    byInvite.set(room.invite, room);
+    byAccess.set(room.accessCode, room);
+}
+
+// messaggi chiari per ogni caso in cui non si può entrare
+const DEAD_MSG = {
+    revoked: "Questo invito non è più valido: il proprietario ne ha creato uno nuovo. Chiedigli il link aggiornato.",
+    expired: "Invito scaduto. Chiedi al tuo amico un nuovo link.",
+    closed: "Il proprietario ha chiuso la stanza.",
+    over: "La partita è terminata.",
+    gone: "La stanza non esiste più.",
+};
+// trova la stanza da invito o codice; altrimenti il messaggio d'errore
+function resolveRoom({ invite, accessCode }) {
+    const key = invite ? String(invite).slice(0, 64) : String(accessCode || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 12);
+    if (!key) return { error: "Inserisci il codice della partita o usa il link d'invito.", bad: true };
+    const room = invite ? byInvite.get(key) : byAccess.get(key);
+    if (!room) {
+        const dead = deadInvites.get(key);
+        if (dead) return { error: DEAD_MSG[dead.reason] || DEAD_MSG.gone };
+        return { error: invite ? "Invito non valido. Controlla di aver aperto il link completo." : "Codice non valido. Controlla di averlo scritto bene.", bad: true };
+    }
+    if (invite && Date.now() > room.inviteExpires && room.status === "lobby") return { error: DEAD_MSG.expired };
+    if (room.status === "closed") return { error: room.closeReason === "owner" ? DEAD_MSG.closed : DEAD_MSG.gone };
+    if (room.status === "gameOver") return { error: DEAD_MSG.over };
+    return { room };
+}
+
+// limite ai tentativi sbagliati per indirizzo IP: indovinare un codice diventa impossibile
+const failures = new Map(); // ip → { n, since }
+const FAIL_MAX = 12, FAIL_WINDOW = 10 * 60 * 1000;
+function ipOf(socket) {
+    const fwd = String(socket.handshake.headers["x-forwarded-for"] || "").split(",")[0].trim();
+    return fwd || socket.handshake.address || "?";
+}
+function blocked(ip) {
+    const f = failures.get(ip);
+    if (!f) return false;
+    if (Date.now() - f.since > FAIL_WINDOW) { failures.delete(ip); return false; }
+    return f.n >= FAIL_MAX;
+}
+function fail(ip) {
+    const f = failures.get(ip);
+    if (!f || Date.now() - f.since > FAIL_WINDOW) failures.set(ip, { n: 1, since: Date.now() });
+    else f.n++;
+}
 
 io.on("connection", (socket) => {
     let currentRoom = null;
@@ -213,7 +310,7 @@ io.on("connection", (socket) => {
         let p = room.players.find((x) => x.id === pid && !x.bot);
         if (!p) {
             // sostituito da un bot dopo la disconnessione: riprende il posto se è davvero lui
-            const held = room.seatHeldFor(pid);
+            const held = room.banned.has(pid) ? null : room.seatHeldFor(pid);
             if (!held) return { ok: false, error: "gone" };
             if (!tokenOk(held.formerHuman, token)) return { ok: false, error: "auth" };
             p = room.restoreHuman(held);
@@ -231,45 +328,102 @@ io.on("connection", (socket) => {
 
     socket.on("resumeSession", (payload, cb) => cb?.(resume(payload || {})));
 
-    socket.on("createRoom", ({ name, difficulty, gameType, pid }, cb) => {
+    // Chi è il giocatore: account (token verificato da Supabase) oppure ospite (id + segreto).
+    // null = token presente ma non valido: si chiede di accedere di nuovo.
+    async function identify({ accessToken, guest } = {}) {
+        if (accessToken) {
+            const user = await verifyUser(accessToken);
+            return user ? { userId: user.id } : null;
+        }
+        return { guest: guestFrom(guest) };
+    }
+    const setIdentity = (p, who) => { p.userId = who.userId || null; p.guest = who.userId ? null : (who.guest || null); };
+    const onGameOver = (room) => {
+        const r = room.gameRecord();
+        if (!r) return;
+        recordGame(r).then((x) => { if (!x.ok && !x.skipped) console.error("statistiche: partita non salvata", x.status, JSON.stringify(x.error)); })
+            .catch((e) => console.error("statistiche:", e.message));
+    };
+
+    socket.on("createRoom", async ({ name, difficulty, gameType, pid, accessToken, guest } = {}, cb) => {
         if (typeof pid !== "string" || !pid) return cb?.({ ok: false, error: "Errore" });
+        const who = await identify({ accessToken, guest });
+        if (!who) return cb?.({ ok: false, error: "Sessione scaduta: accedi di nuovo." });
         let code;
         do { code = genCode(); } while (rooms.has(code));
         const room = new GameRoom(code, io);
         room.chat = new RoomChat(room, io, files);
         room.setConfig({ difficulty, gameType });
         rooms.set(code, room);
-        const p = room.addHuman(pid, name, socket.id);
+        issueInvite(room);
+        room.onGameOver = onGameOver;
+        room.newGameId = newGameId;
+        const p = room.addHuman(pid, String(name || "").trim().slice(0, 14) || "Giocatore", socket.id);
         p.token = newToken();
-        cb?.({ ok: true, code, token: p.token });
+        setIdentity(p, who);
+        cb?.({ ok: true, code, token: p.token, accessCode: room.accessCode, invite: room.invite });
         bind(room, p);
     });
 
-    socket.on("joinRoom", ({ code, name, pid, token }, cb) => {
-        const room = rooms.get((code || "").toUpperCase());
-        if (!room) return cb?.({ ok: false, error: "Stanza non trovata" });
-        if (typeof pid !== "string" || !pid) return cb?.({ ok: false, error: "Errore" });
+    // Ingresso in una stanza privata: SOLO con invito valido o codice d'accesso valido.
+    // L'identificativo della stanza (quello nell'URL /room/…) non basta.
+    socket.on("joinRoom", async ({ invite, accessCode, name, pid, token, accessToken, guest } = {}, cb) => {
+        const reply = typeof cb === "function" ? cb : () => {};
+        if (typeof pid !== "string" || !pid || pid.length > 64) return reply({ ok: false, error: "Errore di sessione: ricarica la pagina." });
+        const who = await identify({ accessToken, guest });
+        if (!who) return reply({ ok: false, error: "Sessione scaduta: accedi di nuovo." });
+        const ip = ipOf(socket);
+        if (blocked(ip)) return reply({ ok: false, error: "Troppi tentativi sbagliati. Riprova tra qualche minuto." });
+        const r = resolveRoom({ invite, accessCode });
+        if (!r.room) { if (r.bad) fail(ip); return reply({ ok: false, error: r.error }); }
+        const room = r.room;
+        if (room.banned.has(pid)) return reply({ ok: false, error: "Il proprietario ti ha rimosso da questa stanza." });
+
+        // stesso ACCOUNT già al tavolo (es. da un altro dispositivo): riprende il suo posto
+        if (who.userId) {
+            const mine = room.players.find((x) => !x.bot && x.userId === who.userId);
+            if (mine) { reply({ ok: true, code: room.code, token: mine.token }); return bind(room, mine); }
+            const heldMine = room.players.find((x) => x.bot && x.formerHuman && x.formerHuman.userId === who.userId);
+            if (heldMine && !room.banned.has(heldMine.formerHuman.id)) {
+                const p = room.restoreHuman(heldMine);
+                reply({ ok: true, code: room.code, token: p.token }); return bind(room, p);
+            }
+        }
         const existing = room.players.find((x) => x.id === pid && !x.bot);
         if (existing) {
             // stesso giocatore che rientra: deve dimostrare di essere lui
-            if (!tokenOk(existing, token)) return cb?.({ ok: false, error: "Sessione non valida per questo posto" });
-            cb?.({ ok: true, code: room.code, token: existing.token });
+            if (!tokenOk(existing, token)) return reply({ ok: false, error: "Questo posto è già occupato da un'altra sessione." });
+            reply({ ok: true, code: room.code, token: existing.token });
             return bind(room, existing);
         }
         const held = room.seatHeldFor(pid);
         if (held) {
             // era in partita ed è stato sostituito da un bot: rientra al suo posto
-            if (!tokenOk(held.formerHuman, token)) return cb?.({ ok: false, error: "Sessione non valida per questo posto" });
+            if (!tokenOk(held.formerHuman, token)) return reply({ ok: false, error: "Questo posto è già occupato da un'altra sessione." });
             const p = room.restoreHuman(held);
-            cb?.({ ok: true, code: room.code, token: p.token });
+            reply({ ok: true, code: room.code, token: p.token });
             return bind(room, p);
         }
-        if (room.status !== "lobby") return cb?.({ ok: false, error: "La partita è già iniziata" });
-        const p = room.addHuman(pid, name, socket.id);
-        if (!p) return cb?.({ ok: false, error: "Stanza piena" });
+        if (room.status !== "lobby") return reply({ ok: false, error: "La partita è già iniziata e non ci sono posti liberi." });
+        const clean = String(name || "").trim().slice(0, 14) || "Giocatore";
+        const p = room.addHuman(pid, clean, socket.id);
+        if (!p) return reply({ ok: false, error: "La stanza è piena (4 giocatori su 4)." });
         p.token = newToken();
-        cb?.({ ok: true, code: room.code, token: p.token });
+        setIdentity(p, who);
+        reply({ ok: true, code: room.code, token: p.token });
         bind(room, p);
+    });
+
+    // anteprima di un invito (prima di scegliere come entrare): chi invita, quanti posti
+    socket.on("inviteInfo", ({ invite } = {}, cb) => {
+        if (typeof cb !== "function") return;
+        const ip = ipOf(socket);
+        if (blocked(ip)) return cb({ ok: false, error: "Troppi tentativi sbagliati. Riprova tra qualche minuto." });
+        const r = resolveRoom({ invite });
+        if (!r.room) { if (r.bad) fail(ip); return cb({ ok: false, error: r.error }); }
+        const room = r.room;
+        cb({ ok: true, host: room.owner ? room.owner.name : "", players: room.humans().length, max: 4,
+            started: room.status !== "lobby", gameType: room.gameType });
     });
 
     // controllo di vita chiesto dal client quando torna in primo piano
@@ -281,6 +435,32 @@ io.on("connection", (socket) => {
             currentRoom.setConfig(cfg);
             currentRoom.emit();
         }
+    });
+
+    // ---- comandi del proprietario (verificati qui: mai fidarsi del client) ----
+    socket.on("kickPlayer", ({ seat } = {}) => {
+        if (!isOwner()) return;
+        const room = currentRoom;
+        const k = room.kick(Number(seat));
+        if (!k) return;
+        room.chat.broadcastRoster();
+        const ks = k.socketId && io.sockets.sockets.get(k.socketId);
+        if (ks) { ks.emit("room:kicked", { room: room.code }); ks.leave(room.code); }
+    });
+    socket.on("closeRoom", () => {
+        if (!isOwner()) return;
+        const room = currentRoom;
+        dropInvites(room, "closed");
+        room.close("owner");
+        cleanup(room, true);
+    });
+    socket.on("regenerateInvite", (a, b) => {
+        const cb = typeof a === "function" ? a : b;
+        const reply = typeof cb === "function" ? cb : () => {};
+        if (!isOwner()) return reply({ ok: false });
+        issueInvite(currentRoom, "revoked");
+        currentRoom.emit();
+        reply({ ok: true });
     });
 
     socket.on("startGame", () => {
@@ -302,6 +482,8 @@ io.on("connection", (socket) => {
     socket.on("setTeam", act(({ seat, team }) => currentRoom.setTeam(playerId, seat, team)));
     socket.on("proposeModes", act(({ modes }) => currentRoom.proposeModes(playerId, modes)));
     socket.on("decideMode", act(({ key, trump }) => currentRoom.decideMode(playerId, key, trump)));
+    // sala d'attesa: "sono pronto"
+    socket.on("setReady", act(({ ready }) => currentRoom.setReady(playerId, ready)));
 
     // ---- chat: il mittente è sempre il giocatore legato a questo socket ----
     const chatMember = () => (me() ? currentRoom.chat.memberFor(playerId) : null);
@@ -322,9 +504,11 @@ io.on("connection", (socket) => {
         const p = me();
         if (p) {
             clearTimeout(p.dropTimer);
-            currentRoom.playerLeaves(playerId);
-            currentRoom.chat.broadcastRoster();
-            cleanup(currentRoom);
+            const room = currentRoom;
+            const { closed } = room.playerLeaves(playerId);
+            if (closed) dropInvites(room, "gone");
+            room.chat.broadcastRoster();
+            cleanup(room);
         }
         currentRoom = null;
     });
@@ -355,15 +539,20 @@ io.on("connection", (socket) => {
 });
 
 // rimuove le stanze senza umani connessi, dopo un'attesa più lunga del periodo di grazia
-function cleanup(room) {
-    if (room.players.some((p) => !p.bot && p.connected)) return;
+function cleanup(room, closedNow = false) {
+    if (room.status === "gameOver") dropInvites(room, "over");          // partita finita: l'invito non serve più
+    if (room.status === "closed") dropInvites(room, room.closeReason === "owner" ? "closed" : "gone");
+    if (!closedNow && room.status !== "closed" && room.players.some((p) => !p.bot && p.connected)) return;
     clearTimeout(room.emptyTimer);
+    // stanza chiusa: qualche secondo perché tutti ricevano l'avviso, poi si libera la memoria
+    const closing = closedNow || room.status === "closed";
     room.emptyTimer = setTimeout(() => {
-        if (room.players.some((p) => !p.bot && p.connected)) return;
-        clearTimeout(room.botTimer); room.stopWatchdog?.();
+        if (!closing && room.players.some((p) => !p.bot && p.connected)) return;
+        clearTimeout(room.botTimer); clearTimeout(room.negTimer); room.stopWatchdog?.();
         for (const p of room.players) clearTimeout(p.dropTimer);
+        dropInvites(room, room.status === "gameOver" ? "over" : room.closeReason === "owner" ? "closed" : "gone");
         room.chat.destroy(); rooms.delete(room.code);
-    }, EMPTY_ROOM_MS);
+    }, closing ? 30000 : EMPTY_ROOM_MS);
 }
 
 httpServer.listen(PORT, () => console.log(`🃏 King server su http://localhost:${PORT}`));

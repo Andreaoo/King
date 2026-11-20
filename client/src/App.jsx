@@ -3,6 +3,9 @@ import { io } from "socket.io-client";
 import Chat from "./chat/Chat.jsx";
 import ScoreChart from "./ScoreChart.jsx";
 import LuckBoard from "./LuckBoard.jsx";
+import { useAccount } from "./account/useAccount.js";
+import { getGuest, supabase } from "./account/supabase.js";
+import { AuthForms, ProfileScreen, StatsScreen, Avatar, ACCOUNT_CSS } from "./account/AccountScreens.jsx";
 
 // In produzione il client è servito dallo stesso server Node → stesso origin.
 // In sviluppo punta al server locale su :3001 (override con VITE_SERVER_URL).
@@ -58,12 +61,31 @@ function clearSession() {
   try { localStorage.removeItem(SESSION_KEY); sessionStorage.removeItem("ck_room"); } catch { /* ignora */ }
 }
 
-// legge un eventuale codice stanza dall'URL: /room/K7P2  oppure  ?room=K7P2
+// /room/ID: la stanza in cui si sta giocando (serve solo a riprendere la propria sessione;
+// per ENTRARE in una stanza servono l'invito o il codice, verificati dal server)
 function readRoomFromUrl() {
-  const m = window.location.pathname.match(/\/room\/([A-Za-z0-9]{4})/);
-  if (m) return m[1].toUpperCase();
-  const q = new URLSearchParams(window.location.search).get("room");
-  return q ? q.toUpperCase() : "";
+  const m = window.location.pathname.match(/\/room\/([A-Za-z0-9]{4,8})/);
+  return m ? m[1].toUpperCase() : "";
+}
+
+// Invito: /invite/SEGRETO. Resta salvato finché non si entra davvero nella stanza,
+// così non si perde se si ricarica la pagina o si passa da un'altra schermata.
+const INVITE_KEY = "ck_invite";
+const INVITE_KEEP = 24 * 3600 * 1000;
+function readInvite() {
+  const m = window.location.pathname.match(/\/invite\/([A-Za-z0-9_-]{8,64})/);
+  if (m) {
+    try { localStorage.setItem(INVITE_KEY, JSON.stringify({ invite: m[1], t: Date.now() })); } catch { /* ignora */ }
+    return m[1];
+  }
+  try {
+    const v = JSON.parse(localStorage.getItem(INVITE_KEY) || "null");
+    if (v && v.invite && Date.now() - v.t < INVITE_KEEP) return v.invite;
+  } catch { /* ignora */ }
+  return null;
+}
+function clearInvite() {
+  try { localStorage.removeItem(INVITE_KEY); } catch { /* ignora */ }
 }
 
 export default function App() {
@@ -75,7 +97,7 @@ export default function App() {
   const [view, setView] = useState("home"); // home | join | lobby | game
   const [state, setState] = useState(null);
   const [name, setName] = useState(localStorage.getItem("ck_name") || "");
-  const [joinCode, setJoinCode] = useState(readRoomFromUrl());
+  const [joinCode, setJoinCode] = useState("");
   const [difficulty, setDifficulty] = useState("neutral");
   const [gameType, setGameType] = useState("teams"); // "teams" | "classic"
   const [error, setError] = useState("");
@@ -83,6 +105,16 @@ export default function App() {
   const lastActionKey = useRef(null);
   const lastNotice = useRef(null);
   const urlRoom = useMemo(readRoomFromUrl, []);
+  const account = useAccount(SERVER_URL);
+  const accRef = useRef(account); accRef.current = account;
+  // chi sono per il server: account (token verificato) o ospite (id + segreto)
+  const identity = () => {
+    const a = accRef.current;
+    return a.accessToken ? { accessToken: a.accessToken } : { guest: getGuest() };
+  };
+  const myName = () => (accRef.current.profile?.nickname || name).trim();
+  const [invite, setInvite] = useState(readInvite);          // invito in attesa di essere usato
+  const [inviteInfo, setInviteInfo] = useState(null);         // { ok, host, players, … } | { ok:false, error }
 
   useEffect(() => {
     const socket = io(SERVER_URL, {
@@ -134,6 +166,14 @@ export default function App() {
         }
         return cur;
       });
+    });
+    // il proprietario ci ha rimossi dalla stanza
+    socket.on("room:kicked", ({ room } = {}) => {
+      const ss = readSession();
+      if (ss && ss.room === room) clearSession();
+      setState(null); setView("home");
+      setError("Il proprietario ti ha rimosso dalla stanza.");
+      window.history.replaceState(null, "", "/");
     });
     socket.on("state", (s) => {
       setState(s);
@@ -197,16 +237,46 @@ export default function App() {
     };
   }, []); // eslint-disable-line
 
-  // se apro un link /room/CODICE, vai direttamente alla schermata "entra"
+  // link /room/ID senza una sessione per quella stanza: l'ID da solo non fa entrare nessuno
   useEffect(() => {
-    if (urlRoom) setView("join");
-  }, [urlRoom]);
+    if (!urlRoom) return;
+    const ss = readSession();
+    if (!ss || ss.room !== urlRoom) {
+      window.history.replaceState(null, "", invite ? `/invite/${invite}` : "/");
+      if (!invite) setError("Per entrare in una partita serve il link d’invito o il codice. Chiedilo a chi ha creato la stanza.");
+    }
+  }, [urlRoom]); // eslint-disable-line
+
+  // invito: appena connessi si chiede al server se è valido e chi ci invita
+  const online = connStatus === "online" || connStatus === "restored";
+  useEffect(() => {
+    if (!invite || !online || state) return;
+    setInviteInfo(null);
+    socketRef.current?.timeout(8000).emit("inviteInfo", { invite }, (err, res) => {
+      setInviteInfo(err ? { ok: false, error: "Il server non risponde. Controlla la connessione e riprova." } : res);
+    });
+  }, [invite, online, !!state]); // eslint-disable-line
+  // con un invito in attesa, appena l'account è pronto si entra da soli nella stanza dell'amico
+  const autoJoined = useRef(false);
+  useEffect(() => {
+    if (invite && inviteInfo?.ok && account.user && account.profile && !state && !autoJoined.current) {
+      autoJoined.current = true;
+      joinRoom(true);
+    }
+  }, [invite, inviteInfo, account.user, account.profile, !!state]); // eslint-disable-line
+  useEffect(() => { if (account.notice) { setNotice(account.notice); account.setNotice(""); } }, [account.notice]); // eslint-disable-line
+  function dismissInvite() {
+    clearInvite(); setInvite(null); setInviteInfo(null); setError("");
+    window.history.replaceState(null, "", "/");
+  }
 
   const emit = (ev, payload, cb) => socketRef.current?.emit(ev, payload, cb);
 
   function createRoom() {
-    localStorage.setItem("ck_name", name);
-    emit("createRoom", { name: name || "Giocatore", difficulty, gameType, pid }, (res) => {
+    if (!myName()) { setError("Scrivi il tuo nickname."); return; }
+    setError("");
+    if (!accRef.current.user) localStorage.setItem("ck_name", name);
+    emit("createRoom", { name: myName(), difficulty, gameType, pid, ...identity() }, (res) => {
       if (!res?.ok) setError(res?.error || "Errore");
       else if (res.code) {
         saveSession(res.code, res.token);
@@ -214,16 +284,19 @@ export default function App() {
       }
     });
   }
-  function joinRoom() {
-    localStorage.setItem("ck_name", name);
-    const code = joinCode.toUpperCase();
+  // entra con l'invito (link) oppure con il codice digitato; il server verifica tutto
+  function joinRoom(useInvite) {
+    if (!myName()) { setError("Scrivi il tuo nickname."); return; }
+    if (!accRef.current.user) localStorage.setItem("ck_name", name);
     const ss = readSession();
-    emit("joinRoom", { code, name: name || "Giocatore", pid, token: ss && ss.room === code ? ss.token : undefined }, (res) => {
-      if (!res?.ok) setError(res?.error || "Errore");
-      else {
-        saveSession(res.code, res.token);
-        window.history.replaceState(null, "", `/room/${code}`);
-      }
+    const how = useInvite && invite ? { invite } : { accessCode: joinCode };
+    setError("");
+    socketRef.current?.timeout(10000).emit("joinRoom", { ...how, name: myName(), pid, token: ss?.token, ...identity() }, (err, res) => {
+      if (err) return setError("Il server non risponde. Controlla la connessione e riprova.");
+      if (!res?.ok) return setError(res?.error || "Impossibile entrare nella stanza.");
+      saveSession(res.code, res.token);
+      if (useInvite) { clearInvite(); setInvite(null); setInviteInfo(null); }
+      window.history.replaceState(null, "", `/room/${res.code}`);
     });
   }
   function leaveRoom() {
@@ -243,7 +316,7 @@ export default function App() {
   }
 
   // app pronta (avvio finito): connessi e, se c'era una partita da riprendere, con lo stato già arrivato
-  const appReady = connStatus !== "connecting" && (!!state || !readSession());
+  const appReady = connStatus !== "connecting" && account.ready && (!!state || !readSession());
   useEffect(() => {
     const fire = () => { if (!window.__ckReady) { window.__ckReady = true; window.dispatchEvent(new Event("ck:ready")); } };
     if (appReady) { fire(); return; }
@@ -272,8 +345,9 @@ export default function App() {
           difficulty={difficulty} setDifficulty={setDifficulty}
           gameType={gameType} setGameType={setGameType}
           joinCode={joinCode} setJoinCode={setJoinCode}
-          onCreate={createRoom} onJoin={joinRoom} error={error}
-          urlRoom={urlRoom}
+          onCreate={createRoom} onJoin={() => joinRoom(false)} onJoinInvite={() => joinRoom(true)} error={error} setError={setError}
+          invite={invite} inviteInfo={inviteInfo} onDismissInvite={dismissInvite}
+          account={account} onAccountNotice={setNotice}
         />
       </Shell>
     );
@@ -286,8 +360,8 @@ export default function App() {
         {connBanner}
         <div className="closed-screen">
           <div className="closed-icon">🚪</div>
-          <h1>Partita chiusa</h1>
-          <p>Il proprietario della stanza ha lasciato la partita.</p>
+          <h1>Stanza chiusa</h1>
+          <p>{state.closeReason === "owner" ? "Il proprietario ha chiuso la stanza." : "La stanza è stata chiusa: non c’erano più giocatori."}</p>
           <button className="btn primary wide" onClick={leaveRoom}>Torna al menu</button>
         </div>
       </Shell>
@@ -303,6 +377,10 @@ export default function App() {
           onConfig={(cfg) => emit("setConfig", cfg)}
           onSetTeam={(seat, team) => emit("setTeam", { seat, team })}
           onLeave={leaveRoom}
+          onKick={(seat) => emit("kickPlayer", { seat })}
+          onReady={(ready) => emit("setReady", { ready })}
+          onCloseRoom={() => emit("closeRoom")}
+          onNewInvite={() => emit("regenerateInvite")}
         />
       </Shell>
     );
@@ -400,72 +478,170 @@ const GAME_TYPES = [
   { k: "classic", t: "👤 Partita classica", d: "Ognuno per sé, le 13 mani nell'ordine fisso." },
 ];
 
-function Home({ view, setView, name, setName, difficulty, setDifficulty, gameType, setGameType, joinCode, setJoinCode, onCreate, onJoin, error, urlRoom }) {
-  const cameFromLink = urlRoom && view === "join";
-  return (
-    <div className="home">
-      <div className="home-hero">
-        {/* ventaglio decorativo con le carte vere del mazzo */}
-        <div className="home-fan" aria-hidden>
-          {["Aspades", "Khearts", "Qdiamonds", "Jclubs"].map((f, i) => (
-            <img key={f} src={`/cards/${f}.jpg`} alt="" draggable={false} style={{ "--i": i }} />
+function Home({ view, setView, name, setName, difficulty, setDifficulty, gameType, setGameType, joinCode, setJoinCode,
+  onCreate, onJoin, onJoinInvite, error, setError, invite, inviteInfo, onDismissInvite, account, onAccountNotice }) {
+  const logged = !!account.user;
+  // pannello: choose | guest | login | register | forgot | newpw | main (con account) | profile | stats
+  const [panel, setPanelRaw] = useState(() => (localStorage.getItem("ck_entry") === "guest" ? "guest" : "choose"));
+  const setPanel = (p) => { setError(""); setPanelRaw(p); if (p === "guest" || p === "choose") try { localStorage.setItem("ck_entry", p); } catch { /* ignora */ } };
+  const shown = account.recovery ? "newpw" : logged && ["choose", "guest", "login", "register", "forgot"].includes(panel) ? "main" : !logged && ["main", "profile"].includes(panel) ? "choose" : panel;
+
+  if (shown === "profile")
+    return <><style>{ACCOUNT_CSS}</style><ProfileScreen account={account} serverUrl={SERVER_URL} onBack={() => setPanel("main")} onStats={() => setPanel("stats")}
+      onLoggedOut={(why) => { setPanel("choose"); onAccountNotice(why === "deleted" ? "Il tuo account è stato eliminato." : "Sei uscito dall’account."); }} /></>;
+  if (shown === "stats")
+    return <><style>{ACCOUNT_CSS}</style><StatsScreen account={account} serverUrl={SERVER_URL} onBack={() => setPanel(logged ? "main" : "guest")} /></>;
+
+  const nameField = (
+    <label className="field">Nickname
+      <input value={name} maxLength={14} onChange={(e) => setName(e.target.value)} placeholder="Il tuo nickname"
+        autoComplete="nickname" enterKeyHint="go" />
+    </label>
+  );
+  // crea una partita / entra con il codice (uguale per ospiti e account)
+  const playBox = view === "home" ? (
+    <>
+      <div className="field">Tipo di partita
+        <div className="opt-list">
+          {GAME_TYPES.map((o) => (
+            <button key={o.k} className={`opt ${gameType === o.k ? "sel" : ""}`} onClick={() => setGameType(o.k)}>
+              <span className="dot" />
+              <span><span className="t">{o.t}</span><span className="d">{o.d}</span></span>
+            </button>
           ))}
         </div>
-        <h1 className="home-title">KING</h1>
-        <p className="home-sub">Barbu · 13 mani · multiplayer online</p>
-        <div className="home-suits" aria-hidden><span>♠</span><span className="r">♥</span><span>♣</span><span className="r">♦</span></div>
       </div>
-
-      {cameFromLink && (
-        <div className="invite-note">Sei stato invitato nella stanza <b>{urlRoom}</b> — scrivi il tuo nome ed entra.</div>
-      )}
-
-      <div className="home-panel">
-      <label className="field">Nome
-        <input value={name} maxLength={14} onChange={(e) => setName(e.target.value)} placeholder="Il tuo nome" />
+      <div className="field">Difficoltà bot (riempiono i posti vuoti)
+        <div className="seg">
+          {[["easy", "Facile"], ["neutral", "Neutro"], ["hard", "Difficile"]].map(([k, l]) => (
+            <button key={k} className={difficulty === k ? "on" : ""} onClick={() => setDifficulty(k)}>{l}</button>
+          ))}
+        </div>
+      </div>
+      <div className="home-actions">
+        <button className="btn primary" onClick={onCreate}>CREA PARTITA</button>
+        <button className="btn ghost" onClick={() => setView("join")}>{logged ? "UNISCITI CON INVITO" : "UNISCITI CON CODICE"}</button>
+      </div>
+    </>
+  ) : (
+    <>
+      <label className="field">Codice partita
+        <input value={joinCode} maxLength={6} onChange={(e) => setJoinCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ""))}
+          placeholder="ES. K7P2QX" autoCapitalize="characters" autoComplete="off" spellCheck={false}
+          style={{ letterSpacing: ".3em", textTransform: "uppercase" }} />
       </label>
-
-      {view === "home" ? (
-        <>
-          <div className="field">Tipo di partita
-            <div className="opt-list">
-              {GAME_TYPES.map((o) => (
-                <button key={o.k} className={`opt ${gameType === o.k ? "sel" : ""}`}
-                  onClick={() => setGameType(o.k)}>
-                  <span className="dot" />
-                  <span><span className="t">{o.t}</span><span className="d">{o.d}</span></span>
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="field">Difficoltà bot (riempiono i posti vuoti)
-            <div className="seg">
-              {[["easy", "Facile"], ["neutral", "Neutro"], ["hard", "Difficile"]].map(([k, l]) => (
-                <button key={k} className={difficulty === k ? "on" : ""} onClick={() => setDifficulty(k)}>{l}</button>
-              ))}
-            </div>
-          </div>
-          <div className="home-actions">
-            <button className="btn primary" onClick={onCreate}>CREA STANZA</button>
-            <button className="btn ghost" onClick={() => setView("join")}>ENTRA IN UNA STANZA</button>
-          </div>
-        </>
-      ) : (
-        <>
-          <label className="field">Codice stanza
-            <input value={joinCode} maxLength={4} onChange={(e) => setJoinCode(e.target.value.toUpperCase())}
-              placeholder="ABCD" style={{ letterSpacing: ".3em", textTransform: "uppercase" }} />
-          </label>
-          <div className="home-actions">
-            <button className="btn primary" onClick={onJoin}>ENTRA</button>
-            <button className="btn ghost" onClick={() => setView("home")}>← Indietro</button>
-          </div>
-        </>
-      )}
+      <p className="acc-note">Se hai ricevuto un link d’invito, basta aprirlo: entri direttamente.</p>
+      <div className="home-actions">
+        <button className="btn primary" onClick={onJoin}>ENTRA</button>
+        <button className="btn ghost" onClick={() => setView("home")}>← Indietro</button>
       </div>
-      {error && <p className="err">{error}</p>}
+    </>
+  );
+  const accountBar = logged && (
+    <div className="acc-bar">
+      <Avatar name={account.profile?.nickname} />
+      <div className="acc-who"><b>{account.profile?.nickname || "…"}</b><span>{account.user.email}</span></div>
+    </div>
+  );
+  const entry = (
+    <div className="entry-btns">
+      <button className="btn primary" onClick={() => setPanel("guest")}>GIOCA COME OSPITE</button>
+      <button className="btn ghost" onClick={() => setPanel("login")}>ACCEDI</button>
+      <button className="btn ghost" onClick={() => setPanel("register")}>REGISTRATI</button>
+    </div>
+  );
+  const authForm = ["login", "register", "forgot", "newpw"].includes(shown) && (
+    <AuthForms mode={shown} setMode={setPanel} invite={invite}
+      onBack={shown === "newpw" ? null : () => setPanel("choose")}
+      onDone={(how) => {
+        if (how === "newpw") { account.setRecovery(false); onAccountNotice("Password aggiornata."); }
+        setPanel("main");
+      }} />
+  );
+
+  let body;
+  if (authForm) body = authForm;
+  else if (invite) {
+    // ---- arrivo da un link d'invito: la stanza è già nota, niente codice da scrivere ----
+    body = !inviteInfo ? (
+      <div className="invite-card"><div className="conn-spinner small" aria-hidden /> Controllo l’invito…</div>
+    ) : !inviteInfo.ok ? (
+      <>
+        <div className="invite-card bad">
+          <div className="ic-title">⚠️ Non è possibile entrare</div>
+          <div className="ic-sub">{inviteInfo.error}</div>
+        </div>
+        <button className="btn primary wide" onClick={onDismissInvite}>VAI ALLA SCHERMATA INIZIALE</button>
+      </>
+    ) : (
+      <>
+        <div className="invite-card ok">
+          <div className="ic-title">🎉 <b>{inviteInfo.host || "Un amico"}</b> ti ha invitato alla sua partita</div>
+          <div className="ic-sub">{inviteInfo.players}/{inviteInfo.max} giocatori · {inviteInfo.gameType === "teams" ? "Gioco a coppie" : "Partita classica"}
+            {inviteInfo.started && " · partita in corso"}</div>
+        </div>
+        {logged ? (
+          <>{accountBar}<button className="btn primary wide" onClick={onJoinInvite}>ENTRA NELLA PARTITA</button></>
+        ) : shown === "guest" ? (
+          <>
+            <div className="guest-tag">GIOCA COME OSPITE</div>
+            {nameField}
+            <button className="btn primary wide" onClick={onJoinInvite}>ENTRA NELLA PARTITA</button>
+            <button className="link-back center" onClick={() => setPanel("choose")}>← Accedi o registrati invece</button>
+          </>
+        ) : (
+          <><p className="acc-note">Come vuoi entrare? Dopo l’accesso entri subito nella stanza.</p>{entry}</>
+        )}
+        <button className="link-back center" onClick={onDismissInvite}>Non ora: vai alla schermata iniziale</button>
+      </>
+    );
+  } else if (logged) {
+    body = (
+      <>
+        {accountBar}
+        {playBox}
+        <div className="acc-menu">
+          <button className="btn ghost" onClick={() => setPanel("stats")}>📊 STATISTICHE</button>
+          <button className="btn ghost" onClick={() => setPanel("profile")}>👤 PROFILO</button>
+        </div>
+        <button className="link-back center" onClick={async () => {
+          if (!confirm("Vuoi uscire dall’account? Le tue statistiche restano salvate.")) return;
+          await supabase.auth.signOut({ scope: "local" });
+          setPanel("choose"); onAccountNotice("Sei uscito dall’account.");
+        }}>Esci dall’account</button>
+      </>
+    );
+  } else if (shown === "guest") {
+    body = (
+      <>
+        <div className="guest-tag">GIOCA COME OSPITE</div>
+        {nameField}
+        {playBox}
+        <div className="acc-links">
+          <button onClick={() => setPanel("stats")}>📊 Le mie statistiche da ospite</button>
+          <button onClick={() => setPanel("choose")}>← Accedi o registrati</button>
+        </div>
+      </>
+    );
+  } else {
+    body = entry;
+  }
+
+  return (
+    <div className="home">
+      <style>{ACCOUNT_CSS}</style>
+      <div className="home-hero">
+        <img className="home-cover" src="/brand/king-home.jpg"
+          srcSet="/brand/king-home.jpg 960w, /brand/king-home@2x.jpg 1440w"
+          sizes="(max-width: 540px) calc(100vw - 32px), 500px" alt="" width="960" height="640" />
+        <h1 className="sr-only">King</h1>
+        <p className="home-sub">Barbu · 13 mani · multiplayer online</p>
+      </div>
+      <div className="home-panel">{body}</div>
+      {error && <p className="err" role="alert">{error}</p>}
       <InstallHint />
-      <p className="home-note">Condividi il codice stanza con gli amici. I posti liberi vengono riempiti da bot quando il proprietario avvia.</p>
+      <p className="home-note">Le partite sono private: si entra solo con il link d’invito o il codice della partita.
+        I posti liberi vengono riempiti da bot quando il proprietario avvia.</p>
     </div>
   );
 }
@@ -604,10 +780,12 @@ function TeamsBox({ state, pid, onSetTeam }) {
   );
 }
 
-function Lobby({ state, pid, onStart, onConfig, onSetTeam, onLeave }) {
+function Lobby({ state, pid, onStart, onConfig, onSetTeam, onLeave, onKick, onReady, onCloseRoom, onNewInvite }) {
   const isOwner = state.isOwner;
-  const humans = state.players.filter((p) => !p.bot).length;
-  const [copied, setCopied] = useState(false);
+  const humans = state.players.filter((p) => !p.bot);
+  const free = 4 - state.players.length;
+  const me = state.players[state.youSeat];
+  const [copied, setCopied] = useState("");
   const [showSettings, setShowSettings] = useState(false);
   // 13 booleani: quali mani giocare (default tutte). Il proprietario le modifica.
   const [enabled, setEnabled] = useState(() => (state.modeOrder || Array(13).fill(0)).map(() => true));
@@ -635,62 +813,91 @@ function Lobby({ state, pid, onStart, onConfig, onSetTeam, onLeave }) {
     setEnabled(next); onConfig({ enabledModes: next });
   };
 
-  const roomUrl = `${window.location.origin}/room/${state.code}`;
-  const shareText = `🃏 Vieni a giocare a King!\n\nLink: ${roomUrl}\nCodice stanza: ${state.code}`;
+  const inviteUrl = `${window.location.origin}/invite/${state.invite}`;
+  const shareText = `🃏 Vieni a giocare a King con me!\n\nTocca il link per entrare nella mia partita:\n${inviteUrl}\n\nOppure apri King e inserisci il codice: ${state.accessCode}`;
 
+  async function copy(text, what) {
+    try { await navigator.clipboard.writeText(text); }
+    catch {
+      const ta = document.createElement("textarea");
+      ta.value = text; document.body.appendChild(ta); ta.select();
+      document.execCommand("copy"); document.body.removeChild(ta);
+    }
+    setCopied(what); setTimeout(() => setCopied(""), 2000);
+  }
   async function share() {
     if (navigator.share) {
-      try { await navigator.share({ title: "King", text: shareText, url: roomUrl }); return; }
-      catch { /* annullato */ }
+      try { await navigator.share({ title: "King", text: shareText }); return; }
+      catch (e) { if (e && e.name === "AbortError") return; }
     }
-    try {
-      await navigator.clipboard.writeText(shareText);
-      setCopied(true); setTimeout(() => setCopied(false), 2000);
-    } catch {
-      const ta = document.createElement("textarea");
-      ta.value = shareText; document.body.appendChild(ta); ta.select();
-      document.execCommand("copy"); document.body.removeChild(ta);
-      setCopied(true); setTimeout(() => setCopied(false), 2000);
-    }
+    copy(shareText, "invito");
   }
 
   return (
     <div className="lobby-page">
     <div className="lobby">
       <button className="link-back" onClick={onLeave}>← Esci</button>
-      <div className="room-code"><span>STANZA</span><b>{state.code}</b></div>
+      <div className="lobby-brand">KING</div>
+      <div className="lobby-name">{state.roomName}</div>
 
+      <div className="code-box">
+        <span className="code-label">CODICE PARTITA</span>
+        <b className="code-value">{state.accessCode}</b>
+        <button className="code-copy" onClick={() => copy(state.accessCode, "codice")}>
+          {copied === "codice" ? "✓ Copiato" : "COPIA CODICE"}</button>
+      </div>
       <button className="btn share" onClick={share}>
-        {copied ? "✓ Copiato negli appunti" : "📤 Condividi stanza"}
+        {copied === "invito" ? "✓ Invito copiato negli appunti" : "📤 CONDIVIDI INVITO"}
       </button>
-
+      <div className="invite-link" title={inviteUrl}>
+        <span>{inviteUrl.replace(/^https?:\/\//, "")}</span>
+        <button onClick={() => copy(inviteUrl, "link")}>{copied === "link" ? "✓" : "Copia"}</button>
+      </div>
       {isOwner && (
-        <button className="btn ghost wide" onClick={() => setShowSettings(true)}>
-          ⚙️ Mani da giocare ({selectedCount}/{modeLabels.length})
-        </button>
+        <button className="link-back small" onClick={() => {
+          if (confirm("Creare un nuovo invito? Il link e il codice attuali smetteranno di funzionare (chi è già nella stanza resta dentro).")) onNewInvite();
+        }}>🔄 Nuovo link e codice (annulla quelli vecchi)</button>
       )}
 
-      {state.gameType === "teams" ? (
-        <TeamsBox state={state} pid={pid} onSetTeam={onSetTeam} />
-      ) : (
-        <div className="seats">
-          {state.players.map((p, i) => (
-            <div className="seat-row" key={i}>
-              <span>{p.bot ? "🤖" : "👤"} {p.name}{!p.connected && " (offline)"}</span>
-              <em>{p.bot ? p.diffLabel : i === 0 ? "proprietario" : "in attesa"}</em>
-            </div>
-          ))}
-          {Array.from({ length: 4 - state.players.length }).map((_, i) => (
-            <div className="seat-row empty" key={"e" + i}><span>posto libero</span><em>→ bot</em></div>
-          ))}
-        </div>
-      )}
-      <p className="lobby-hint">{humans}/4 umani · i posti restanti diventano bot</p>
+      <div className="roster">
+        <div className="roster-head"><span>GIOCATORI</span><span>{humans.length}/4 · {free > 0 ? `${free} ${free === 1 ? "posto libero" : "posti liberi"}` : "stanza piena"}</span></div>
+        {state.players.map((p, i) => (
+          <div className={`roster-row ${i === state.youSeat ? "me" : ""}`} key={i}>
+            <span className={`conn-dot ${p.connected ? "on" : "off"}`} title={p.connected ? "connesso" : "non connesso"} />
+            <span className="r-name">{p.isOwner && <span className="crown" title="Proprietario">👑</span>}{p.bot ? "🤖 " : ""}{p.name}
+              {i === state.youSeat && <span className="r-you">TU</span>}</span>
+            <span className="r-state">
+              {p.isOwner ? "proprietario" : !p.connected ? "non connesso" : p.ready ? <b className="r-ready">✓ pronto</b> : "in attesa"}
+            </span>
+            {isOwner && !p.isOwner && !p.bot && (
+              <button className="r-kick" title={`Rimuovi ${p.name}`}
+                onClick={() => confirm(`Rimuovere ${p.name} dalla stanza? Non potrà rientrare.`) && onKick(i)}>✕</button>
+            )}
+          </div>
+        ))}
+        {state.gameType !== "teams" && Array.from({ length: free }).map((_, i) => (
+          <div className="roster-row empty" key={"e" + i}><span className="conn-dot none" /><span className="r-name">posto libero</span><span className="r-state">→ bot all’avvio</span></div>
+        ))}
+      </div>
+
+      {state.gameType === "teams" && <TeamsBox state={state} pid={pid} onSetTeam={onSetTeam} />}
+
       {isOwner ? (
-        <button className="btn primary wide" onClick={onStart}
-          disabled={state.gameType === "teams" && !state.teamsValid}>AVVIA PARTITA</button>
+        <>
+          <button className="btn ghost wide" onClick={() => setShowSettings(true)}>
+            ⚙️ Mani da giocare ({selectedCount}/{modeLabels.length})
+          </button>
+          <button className="btn primary wide" onClick={onStart}
+            disabled={state.gameType === "teams" && !state.teamsValid}>INIZIA PARTITA</button>
+          <button className="btn danger-ghost wide" onClick={() => confirm("Chiudere la stanza per tutti?") && onCloseRoom()}>
+            Chiudi stanza</button>
+        </>
       ) : (
-        <div className="waiting">In attesa che il proprietario avvii la partita…</div>
+        <>
+          <button className={`btn wide ${me?.ready ? "ghost" : "primary"}`} onClick={() => onReady(!me?.ready)}>
+            {me?.ready ? "✓ PRONTO — tocca per annullare" : "SONO PRONTO"}</button>
+          <div className="waiting">In attesa che il proprietario inizi la partita…</div>
+        </>
       )}
 
       {showSettings && (
@@ -901,7 +1108,7 @@ function Game({ state: s, pid, guardedAct, onPlay, onTrump, onBlind, onPass, onN
   const [showSidebar, setShowSidebar] = useState(false);
   const seat = s.youSeat;
   const myTurn = s.turn === seat;
-  const isOwner = s.isOwner;
+  const isOwner = s.isOwner || s.ownerOffline;   // proprietario offline: chiunque può andare avanti
 
   const seatOf = (i) => LAYOUT[(i - seat + 4) % 4]; // ruota così che "tu" sia sempre in basso
 
@@ -960,7 +1167,7 @@ function Game({ state: s, pid, guardedAct, onPlay, onTrump, onBlind, onPass, onN
           {/* nell'angolo in alto a sinistra: in alto a destra c'è la ✕ della chat, troppo vicina */}
           <button className="ck-exit" onClick={() => { if (confirm("Uscire dalla partita?")) onLeave(); }}>← Esci</button>
           <button className="menu-toggle" onClick={() => setShowSidebar((v) => !v)} title="Modalità e punteggi">☰</button>
-          🃏 KING <small>· {s.code}</small>
+          🃏 KING <small>· {s.accessCode || s.code}</small>
         </div>
         <div className="ck-status">
           <span><b>Mano</b> {s.modeIndex + 1}/{s.totalModes} — {s.modeShort}</span>
@@ -1654,6 +1861,53 @@ function Style() {
 
     /* LOBBY */
     /* la lobby sta al centro dello schermo, lontana da notch, barra di stato e bordi arrotondati */
+    .sr-only { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; }
+    .home-cover { display:block; width:min(500px, calc(100vw - 32px)); height:auto; aspect-ratio:3/2; margin:0 auto;
+      border-radius:20px; object-fit:cover; box-shadow:0 18px 44px rgba(0,0,0,.45), 0 0 0 1px rgba(217,178,95,.35); }
+    .guest-tag { font-size:11px; font-weight:700; letter-spacing:.16em; color:var(--gold); margin:0 0 10px; }
+    .invite-card { display:flex; flex-direction:column; gap:4px; padding:12px 14px; margin-bottom:14px; border-radius:12px;
+      background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.14); font-size:14px; }
+    .invite-card:not(.ok):not(.bad) { flex-direction:row; align-items:center; gap:10px; }
+    .invite-card.ok { background:rgba(217,178,95,.12); border-color:rgba(217,178,95,.5); }
+    .invite-card.bad { background:rgba(192,57,43,.16); border-color:rgba(255,120,100,.5); }
+    .invite-card .ic-title { font-size:15px; line-height:1.35; }
+    .invite-card .ic-sub { font-size:13px; color:#cfe0d4; line-height:1.4; }
+    .conn-spinner.small { width:18px; height:18px; border-width:2px; margin:0; }
+    .link-back.center { display:block; margin:12px auto 4px; color:#cfe0d4; }
+    .link-back.small { display:block; margin:-2px auto 12px; font-size:12.5px; color:#cfe0d4; }
+    .lobby-brand { font-family:'Cormorant Garamond',serif; font-weight:700; font-size:30px; letter-spacing:.18em; color:var(--gold);
+      text-align:center; line-height:1; margin-top:2px; }
+    .lobby-name { text-align:center; font-size:13px; color:#cfe0d4; margin:4px 0 12px; }
+    .code-box { display:flex; flex-wrap:wrap; align-items:center; gap:4px 10px; padding:9px 12px 10px; margin-bottom:10px; border-radius:12px;
+      background:rgba(0,0,0,.25); border:1px solid rgba(217,178,95,.4); }
+    .code-label { width:100%; font-size:10px; letter-spacing:.14em; color:#cfe0d4; line-height:1.2; }
+    .code-value { flex:1; font-family:'Outfit',system-ui,sans-serif; font-weight:700; font-size:27px; line-height:1.15; letter-spacing:.16em; color:var(--gold); font-variant-numeric:tabular-nums;
+      min-width:0; white-space:nowrap; }
+    .code-copy { flex:none; padding:7px 10px; border-radius:8px; border:1px solid rgba(217,178,95,.5); background:rgba(217,178,95,.12);
+      color:var(--gold); font-size:11.5px; font-weight:700; letter-spacing:.04em; -webkit-appearance:none; }
+    .invite-link { display:flex; align-items:center; gap:8px; margin:0 0 10px; padding:6px 6px 6px 10px; border-radius:9px;
+      background:rgba(255,255,255,.05); border:1px solid rgba(255,255,255,.12); font-size:12px; color:#cfe0d4; }
+    .invite-link span { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .invite-link button { flex:none; padding:5px 10px; border-radius:7px; border:none; background:rgba(255,255,255,.12);
+      color:var(--paper); font-size:12px; -webkit-appearance:none; }
+    .roster { margin:4px 0 14px; display:grid; gap:6px; }
+    .roster-head { display:flex; justify-content:space-between; font-size:10.5px; letter-spacing:.12em; color:#cfe0d4; margin-bottom:2px; }
+    .roster-row { display:flex; align-items:center; gap:9px; padding:9px 10px; border-radius:10px; background:rgba(255,255,255,.06);
+      font-size:14px; min-height:42px; }
+    .roster-row.me { box-shadow:inset 0 0 0 1px rgba(217,178,95,.45); }
+    .roster-row.empty { background:rgba(255,255,255,.025); color:rgba(246,241,230,.5); border:1px dashed rgba(255,255,255,.14); }
+    .conn-dot { width:9px; height:9px; border-radius:50%; flex:none; }
+    .conn-dot.on { background:#4cd27e; box-shadow:0 0 0 3px rgba(76,210,126,.18); }
+    .conn-dot.off { background:#e0a43a; }
+    .conn-dot.none { background:rgba(255,255,255,.15); }
+    .r-name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600; }
+    .crown { margin-right:5px; }
+    .r-you { margin-left:7px; font-size:10px; font-weight:700; letter-spacing:.08em; color:var(--gold); }
+    .r-state { flex:none; font-size:12px; color:#cfe0d4; }
+    .r-ready { color:#7fe0a2; font-weight:700; }
+    .r-kick { flex:none; width:30px; height:30px; border-radius:8px; border:1px solid rgba(255,120,100,.45); background:rgba(192,57,43,.18);
+      color:#ffb3a6; font-size:13px; -webkit-appearance:none; }
+    .btn.danger-ghost { margin-top:10px; background:transparent; border:1px solid rgba(255,120,100,.45); color:#ffb3a6; }
     .lobby-page, .page-center { min-height:100dvh; display:flex; align-items:center; justify-content:center;
       /* in basso resta lo spazio per il pulsante della chat, che non deve coprire AVVIA PARTITA */
       padding:calc(16px + var(--sat)) calc(16px + var(--sar)) calc(86px + var(--sab)) calc(16px + var(--sal)); }

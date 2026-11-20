@@ -27,7 +27,7 @@ export function useAccount(serverUrl) {
         body: JSON.stringify({ guest: getGuest() }),
       }).then((x) => x.json());
       if (r.ok) {
-        if (r.moved > 0) setNotice(`Le tue ${r.moved} partite da ospite sono state aggiunte al tuo account.`);
+        if (r.moved > 0) setNotice(r.moved === 1 ? "La partita che hai giocato da ospite è stata aggiunta al tuo account." : `Le ${r.moved} partite che hai giocato da ospite sono state aggiunte al tuo account.`);
         resetGuest();
       }
     } catch { /* riprova al prossimo accesso */ claimed.current.delete(s.user.id); }

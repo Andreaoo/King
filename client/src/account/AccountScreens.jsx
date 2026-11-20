@@ -132,7 +132,7 @@ export function ProfileScreen({ account, onBack, onStats, onLoggedOut, serverUrl
   const [pw, setPw] = useState(null);       // null | { a, b }
   const [busy, setBusy] = useState(false);
   useEffect(() => setNick(profile?.nickname || ""), [profile?.nickname]);
-  const flash = (m) => { setMsg(m); setErr(""); setTimeout(() => setMsg(""), 2500); };
+  const flash = (m) => { setMsg(m); setErr(""); setTimeout(() => setMsg(""), 5000); };
 
   async function saveNick() {
     const v = nick.trim().slice(0, 14);
@@ -294,7 +294,7 @@ export function StatsScreen({ account, serverUrl, onBack }) {
                 </button>
                 {open === g.id && (
                   <div className="hist-det">
-                    <div className="hist-meta">{fmtDate(g.ended_at)} · {g.game_type === "teams" ? "A coppie" : "Classica"} · {g.hands_played} mani · durata {fmtDur(g.duration_s)}</div>
+                    <div className="hist-meta">{fmtDate(g.ended_at)} · {g.game_type === "teams" ? "A coppie" : "Classica"} · {g.hands_played} {g.hands_played === 1 ? "mano" : "mani"} · durata {fmtDur(g.duration_s)}</div>
                     <table>
                       <thead><tr><th>Pos.</th><th>Giocatore</th><th>Punti</th><th>Fortuna</th></tr></thead>
                       <tbody>{[...g.game_players].sort((a, b) => a.position - b.position || b.final_score - a.final_score).map((p) => (

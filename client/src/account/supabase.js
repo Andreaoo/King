@@ -56,7 +56,7 @@ export function authError(e) {
   if (/invalid login credentials/i.test(m)) return "Email o password non corretti.";
   if (/email not confirmed/i.test(m)) return "Devi prima confermare l’email: apri il messaggio che ti abbiamo mandato e tocca il link.";
   if (/already registered|already been registered|user already exists/i.test(m)) return "Esiste già un account con questa email. Prova ad accedere.";
-  if (/database error saving new user/i.test(m)) return "Nome utente già in uso: scegline un altro.";
+  if (/database error saving new user/i.test(m)) return "Registrazione non riuscita: controlla nome e cognome e riprova.";
   if (/rate limit|too many/i.test(m)) return "Troppi tentativi o troppe email inviate. Riprova tra qualche minuto.";
   if (/password should be at least|weak password/i.test(m)) return "Password troppo debole: usa almeno 8 caratteri.";
   if (/same password|different from the old/i.test(m)) return "La nuova password deve essere diversa da quella attuale.";

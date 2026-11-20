@@ -15,7 +15,7 @@ create extension if not exists pgcrypto;
 -- ---------- profili (1 per account) ----------
 create table if not exists public.profiles (
   id          uuid primary key references auth.users(id) on delete cascade,
-  username    text unique check (username ~ '^[A-Za-z0-9_.]{3,24}$'),
+  username    text check (username is null or char_length(btrim(username)) between 2 and 50),  -- nome e cognome (non unico)
   nickname    text not null check (char_length(nickname) between 1 and 14),
   avatar_url  text,
   created_at  timestamptz not null default now()

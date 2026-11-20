@@ -1,7 +1,9 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase, setRemember, getRemember, authError, getGuest } from "./supabase.js";
 
-const USERNAME_RE = /^[A-Za-z0-9_.]{3,24}$/;
+// nome e cognome: lettere (anche accentate), spazi, apostrofo, trattino e punto
+const FULLNAME_RE = /^\p{L}[\p{L}'’ .-]{1,49}$/u;
+const cleanName = (v) => v.replace(/\s+/g, " ").trim();
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 const fmtDate = (d) => new Date(d).toLocaleDateString("it-IT", { day: "numeric", month: "long", year: "numeric" });
 const fmtShort = (d) => new Date(d).toLocaleDateString("it-IT", { day: "2-digit", month: "2-digit", year: "2-digit" });
@@ -32,7 +34,7 @@ export function AuthForms({ mode, setMode, invite, onDone, onBack }) {
         if (error) return setErr(authError(error));
         onDone?.("login");
       } else if (mode === "register") {
-        if (!USERNAME_RE.test(f.username)) return setErr("Nome utente: 3–24 caratteri, solo lettere, numeri, punto e trattino basso.");
+        if (!FULLNAME_RE.test(cleanName(f.username))) return setErr("Scrivi nome e cognome (almeno 2 lettere; ammessi spazi, apostrofo e trattino).");
         if (!f.nickname.trim()) return setErr("Scegli il nickname che vedranno gli altri giocatori.");
         if (!EMAIL_RE.test(email)) return setErr("Indirizzo email non valido.");
         if (f.password.length < 8) return setErr("La password deve avere almeno 8 caratteri.");
@@ -41,7 +43,7 @@ export function AuthForms({ mode, setMode, invite, onDone, onBack }) {
         setRemember(true);
         const { data, error } = await supabase.auth.signUp({
           email, password: f.password,
-          options: { data: { username: f.username, nickname: f.nickname.trim().slice(0, 14) }, emailRedirectTo: back },
+          options: { data: { username: cleanName(f.username), nickname: f.nickname.trim().slice(0, 14) }, emailRedirectTo: back },
         });
         if (error) return setErr(authError(error));
         // Supabase non rivela se l'email esiste già: in quel caso non c'è nessuna identità nuova
@@ -74,8 +76,8 @@ export function AuthForms({ mode, setMode, invite, onDone, onBack }) {
       <div className="acc-title">{titles[mode]}</div>
       {mode === "register" && (
         <>
-          <label className="field">Nome utente
-            <input value={f.username} onChange={set("username")} autoComplete="username" autoCapitalize="none" spellCheck={false} maxLength={24} placeholder="es. mario_rossi" />
+          <label className="field">Nome e cognome
+            <input value={f.username} onChange={set("username")} autoComplete="name" autoCapitalize="words" maxLength={50} placeholder="es. Andrea De Filippis" />
           </label>
           <label className="field">Nickname (visibile in partita)
             <input value={f.nickname} onChange={set("nickname")} maxLength={14} autoComplete="nickname" placeholder="es. Mario" />
@@ -175,7 +177,7 @@ export function ProfileScreen({ account, onBack, onStats, onLoggedOut, serverUrl
       <button className="link-back" onClick={onBack}>← Indietro</button>
       <div className="acc-head">
         <Avatar name={profile?.nickname} big />
-        <div className="acc-who"><b>{profile?.nickname}</b>{profile?.username && <span>@{profile.username}</span>}</div>
+        <div className="acc-who"><b>{profile?.nickname}</b>{profile?.username && <span>{profile.username}</span>}</div>
       </div>
       <div className="acc-card">
         <label className="field">Nickname
